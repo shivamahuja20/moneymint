@@ -1,0 +1,20 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# Logs & runtime output
+*.log
+nohup.out
+
+# macOS
+.DS_Store
+
+# Local data & debug artifacts (DB lives in PostgreSQL, not in the repo)
+backend/fund_analyser.db
+backend/*.png
+backend/untitled folder/

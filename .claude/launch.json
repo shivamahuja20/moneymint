@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "/Users/shivamahuja/Desktop/MoneyMint/backend/venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--port", "8000", "--app-dir", "/Users/shivamahuja/Desktop/MoneyMint/backend"],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "/Users/shivamahuja/Desktop/MoneyMint/fund-analyser-frontend"],
+      "port": 5173
+    }
+  ]
+}
