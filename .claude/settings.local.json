@@ -11,7 +11,8 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 8 https://api.mfapi.in/mf/118825)",
       "Bash(curl -s --max-time 15 https://www.amfiindia.com/spages/NAVAll.txt)",
       "Bash(./venv/bin/python -c ' *)",
-      "Bash(sqlite3 /Users/shivamahuja/Desktop/MoneyMint/backend/fund_analyser.db \"select count\\(*\\) from nav_history; select count\\(*\\) from flow_daily; select min\\(date\\), max\\(date\\) from nav_history;\")"
+      "Bash(sqlite3 /Users/shivamahuja/Desktop/MoneyMint/backend/fund_analyser.db \"select count\\(*\\) from nav_history; select count\\(*\\) from flow_daily; select min\\(date\\), max\\(date\\) from nav_history;\")",
+      "Bash(/opt/homebrew/opt/postgresql@17/bin/psql -d moneymint -c ' *)"
     ]
   }
 }
