@@ -68,3 +68,98 @@ class FlowPoint(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- Phase 5: all-schemes explorer ----------
+
+class SchemeListItem(BaseModel):
+    scheme_code: str
+    name: str
+    amc: Optional[str] = None
+    category: Optional[str] = None
+    plan_type: Optional[str] = None
+    option_type: Optional[str] = None
+    nav: Optional[float] = None
+    nav_date: Optional[date] = None
+    ret_1y: Optional[float] = None
+    ret_3y: Optional[float] = None
+    ret_5y: Optional[float] = None
+    sharpe_3y: Optional[float] = None
+
+
+class SchemeListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    schemes: list[SchemeListItem]
+
+
+class FacetValue(BaseModel):
+    value: str
+    count: int
+
+
+class FacetsResponse(BaseModel):
+    categories: list[FacetValue]
+    amcs: list[FacetValue]
+
+
+class SchemeReturnRow(BaseModel):
+    period: str
+    fund_return: Optional[float] = None
+    benchmark_return: Optional[float] = None
+    category_avg_return: Optional[float] = None
+
+
+class SchemeRiskRow(BaseModel):
+    period: str
+    stdev: Optional[float] = None
+    sharpe: Optional[float] = None
+    beta: Optional[float] = None
+    alpha: Optional[float] = None
+    max_drawdown: Optional[float] = None
+
+
+class BenchmarkInfo(BaseModel):
+    proxy_scheme_code: str
+    proxy_name: Optional[str] = None
+    note: Optional[str] = None
+
+
+class SchemeDetail(BaseModel):
+    scheme_code: str
+    name: str
+    amc: Optional[str] = None
+    category: Optional[str] = None
+    plan_type: Optional[str] = None
+    option_type: Optional[str] = None
+    isin: Optional[str] = None
+    launch_date: Optional[date] = None
+    nav: Optional[float] = None
+    nav_date: Optional[date] = None
+    benchmark: Optional[BenchmarkInfo] = None
+    returns: list[SchemeReturnRow]
+    risk: list[SchemeRiskRow]
+
+
+class NavPoint(BaseModel):
+    date: date
+    nav: float
+
+
+class NavSeriesResponse(BaseModel):
+    scheme_code: str
+    range: str
+    points: list[NavPoint]
+
+
+class CompareScheme(BaseModel):
+    scheme_code: str
+    name: str
+    category: Optional[str] = None
+    returns: list[SchemeReturnRow]
+    risk: list[SchemeRiskRow]
+
+
+class CompareResponse(BaseModel):
+    schemes: list[CompareScheme]
