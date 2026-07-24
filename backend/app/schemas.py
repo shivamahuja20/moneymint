@@ -85,6 +85,7 @@ class SchemeListItem(BaseModel):
     ret_3y: Optional[float] = None
     ret_5y: Optional[float] = None
     sharpe_3y: Optional[float] = None
+    percentile_3y: Optional[float] = None   # category standing on 3Y return, 100 = best
 
 
 class SchemeListResponse(BaseModel):
@@ -126,6 +127,13 @@ class BenchmarkInfo(BaseModel):
     note: Optional[str] = None
 
 
+class RankingRow(BaseModel):
+    period: str
+    rank_in_category: Optional[int] = None
+    category_size: Optional[int] = None
+    percentile: Optional[float] = None   # 0-100, 100 = best in category
+
+
 class SchemeDetail(BaseModel):
     scheme_code: str
     name: str
@@ -141,6 +149,7 @@ class SchemeDetail(BaseModel):
     benchmark: Optional[BenchmarkInfo] = None
     returns: list[SchemeReturnRow]
     risk: list[SchemeRiskRow]
+    rankings: list[RankingRow]
 
 
 class NavPoint(BaseModel):

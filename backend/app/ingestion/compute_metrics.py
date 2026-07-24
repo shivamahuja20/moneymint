@@ -261,6 +261,31 @@ def compute_category_stats(conn) -> int:
     return res.rowcount
 
 
+def compute_rankings(conn) -> int:
+    """Rank each usable scheme against its category peers, per period.
+
+    rank_in_category: 1 = best return in the category (ties share a rank).
+    category_size:    number of ranked peers for that category+period.
+    percentile:       0-100 where 100 = best in category ("better than N% of
+                      peers"), from percent_rank() over ascending return.
+    Only data_quality IS NULL schemes are ranked, so wound-up / corrupted funds
+    never appear in or distort the tables. Rebuild-safe."""
+    conn.execute(text("DELETE FROM rankings"))
+    res = conn.execute(text("""
+        INSERT INTO rankings (scheme_code, period, category, rank_in_category,
+                              category_size, percentile, as_of_date)
+        SELECT r.scheme_code, r.period, m.category,
+               rank()  OVER (PARTITION BY m.category, r.period ORDER BY r.ret DESC),
+               count(*) OVER (PARTITION BY m.category, r.period),
+               round((percent_rank() OVER (PARTITION BY m.category, r.period ORDER BY r.ret ASC) * 100)::numeric),
+               r.as_of_date
+        FROM scheme_returns r
+        JOIN scheme_master m ON m.scheme_code = r.scheme_code
+        WHERE m.category IS NOT NULL AND m.data_quality IS NULL
+    """))
+    return res.rowcount
+
+
 # ---------------------------------------------------------------------------
 # Pass d: scheme-level data-quality flag (drives the explorer hard-exclude)
 # ---------------------------------------------------------------------------
@@ -336,8 +361,10 @@ def run():
         print(f"data_quality: {n_stale:,} stale, {n_disc:,} discontinuity (excluded from explorer).")
     with engine.begin() as conn:
         n_cat = compute_category_stats(conn)
+        n_rank = compute_rankings(conn)
         n_legacy = wire_legacy_fund_returns(conn)
-        print(f"category_stats: {n_cat:,} rows. fund_returns rebuilt: {n_legacy} rows.")
+        print(f"category_stats: {n_cat:,} rows. rankings: {n_rank:,} rows. "
+              f"fund_returns rebuilt: {n_legacy} rows.")
     print(f"Metrics engine done in {time.time() - started:.0f}s.")
 
 

@@ -25,6 +25,7 @@ const PERIODS = ["1M", "3M", "6M", "1Y", "3Y", "5Y", "10Y"];
 function retColor(v) { return v == null ? MUTE : v >= 0 ? GREEN : RED; }
 function fmtPct(v) { return v == null ? "—" : `${v}%`; }
 function fmtNum(v) { return v == null ? "—" : v; }
+function pctColor(v) { return v == null ? MUTE : v >= 67 ? GREEN : v >= 33 ? GOLD : RED; }
 
 // ---------------------------------------------------------------------------
 // Explorer (home)
@@ -179,7 +180,14 @@ function Explorer({ onSelectScheme, compareCodes, toggleCompare, onOpenCompare }
                           {s.nav != null ? `₹${s.nav}` : "—"}
                         </td>
                         <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, fontWeight: 600, color: retColor(s.ret_1y) }}>{fmtPct(s.ret_1y)}</td>
-                        <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, fontWeight: 600, color: retColor(s.ret_3y) }}>{fmtPct(s.ret_3y)}</td>
+                        <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, fontWeight: 600, color: retColor(s.ret_3y) }}>
+                          <div>{fmtPct(s.ret_3y)}</div>
+                          {s.percentile_3y != null && (
+                            <div style={{ fontSize: 9.5, fontWeight: 600, color: pctColor(s.percentile_3y), marginTop: 2 }}>
+                              top {Math.max(1, 100 - Math.round(s.percentile_3y))}%
+                            </div>
+                          )}
+                        </td>
                         <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, fontWeight: 600, color: retColor(s.ret_5y) }}>{fmtPct(s.ret_5y)}</td>
                         <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, color: INK }}>{fmtNum(s.sharpe_3y)}</td>
                       </tr>
@@ -345,6 +353,31 @@ function SchemeDetail({ code, onBack }) {
                 </div>
               );
             })}
+          </div>
+
+          {/* category rank */}
+          <div style={{ marginTop: 22, borderTop: "1px solid rgba(237,234,226,0.08)", paddingTop: 16 }}>
+            <span style={sectionLabel}>CATEGORY RANK</span>
+            <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 4 }}>
+              Standing among usable {(d.category || "").replace(/^Equity Schemes? - /, "").replace(/^Debt Scheme - /, "")} peers.
+            </div>
+            <div style={{ marginTop: 12 }}>
+              {PERIODS.map(p => {
+                const rk = d.rankings.find(x => x.period === p);
+                const top = rk && rk.percentile != null ? Math.max(1, 100 - Math.round(rk.percentile)) : null;
+                return (
+                  <div key={p} className="ledger-line mono" style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr", padding: "9px 0", fontSize: 13 }}>
+                    <span style={{ color: MUTE }}>{p}</span>
+                    <span style={{ textAlign: "right", color: INK }}>
+                      {rk ? `#${rk.rank_in_category} of ${rk.category_size}` : "—"}
+                    </span>
+                    <span style={{ textAlign: "right", fontWeight: 600, color: pctColor(rk ? rk.percentile : null) }}>
+                      {top != null ? `top ${top}%` : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 

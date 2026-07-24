@@ -124,7 +124,7 @@ def list_schemes(
         SELECT m.scheme_code, m.name, m.amc, m.category, m.plan_type, m.option_type,
                nav.nav, nav.date AS nav_date,
                r1.ret AS ret_1y, r3.ret AS ret_3y, r5.ret AS ret_5y,
-               rk.sharpe AS sharpe_3y
+               rk.sharpe AS sharpe_3y, rnk.percentile AS percentile_3y
         FROM scheme_master m
         LEFT JOIN LATERAL (
             SELECT nav, date FROM nav_history h
@@ -134,6 +134,7 @@ def list_schemes(
         LEFT JOIN scheme_returns r3 ON r3.scheme_code = m.scheme_code AND r3.period = '3Y'
         LEFT JOIN scheme_returns r5 ON r5.scheme_code = m.scheme_code AND r5.period = '5Y'
         LEFT JOIN scheme_risk    rk ON rk.scheme_code = m.scheme_code AND rk.period = '3Y'
+        LEFT JOIN rankings      rnk ON rnk.scheme_code = m.scheme_code AND rnk.period = '3Y'
         WHERE {where_sql}
         ORDER BY {sort_col} {order_sql} NULLS LAST, m.name ASC
         LIMIT :limit OFFSET :offset
@@ -176,6 +177,7 @@ def scheme_detail(code: str, db: Session = Depends(get_db)):
         benchmark=schemas.BenchmarkInfo(**bench) if bench else None,
         returns=_returns_for(db, code, m["category"]),
         risk=_risk_for(db, code),
+        rankings=_rankings_for(db, code),
     )
 
 
@@ -246,3 +248,12 @@ def _risk_for(db, code):
         ORDER BY array_position(ARRAY['1Y','3Y','5Y'], period)
     """), {"c": code}).mappings().all()
     return [schemas.SchemeRiskRow(**r) for r in rows]
+
+
+def _rankings_for(db, code):
+    rows = db.execute(text("""
+        SELECT period, rank_in_category, category_size, percentile
+        FROM rankings WHERE scheme_code = :c
+        ORDER BY array_position(ARRAY['1M','3M','6M','1Y','3Y','5Y','10Y'], period)
+    """), {"c": code}).mappings().all()
+    return [schemas.RankingRow(**r) for r in rows]
