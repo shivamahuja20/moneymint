@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import {
-  Search, ArrowLeft, ArrowUp, ArrowDown, X, GitCompare,
+  Search, ArrowLeft, ArrowUp, ArrowDown, X, GitCompare, Calculator,
 } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
@@ -26,6 +26,10 @@ function retColor(v) { return v == null ? MUTE : v >= 0 ? GREEN : RED; }
 function fmtPct(v) { return v == null ? "—" : `${v}%`; }
 function fmtNum(v) { return v == null ? "—" : v; }
 function pctColor(v) { return v == null ? MUTE : v >= 67 ? GREEN : v >= 33 ? GOLD : RED; }
+function fmtINR(v) {
+  if (v == null) return "—";
+  return "₹" + Math.round(v).toLocaleString("en-IN");
+}
 
 // ---------------------------------------------------------------------------
 // Explorer (home)
@@ -404,6 +408,251 @@ function SchemeDetail({ code, onBack }) {
             "—" where history is too short or no proxy exists.
           </div>
         </div>
+      </div>
+
+      <Calculators code={code} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Calculators (backtest over real NAVs + forward projection), on the detail page
+// ---------------------------------------------------------------------------
+const calcInput = {
+  background: BG, color: INK, border: BORDER, borderRadius: 6,
+  padding: "8px 10px", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace",
+  width: "100%", boxSizing: "border-box",
+};
+const tab = (active) => ({
+  background: active ? GOLD : PANEL, color: active ? BG : MUTE, border: "none",
+  padding: "7px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+  fontFamily: "'Inter',sans-serif",
+});
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: "block" }}>
+      <div className="mono" style={{ fontSize: 10, color: MUTE, marginBottom: 4 }}>{label}</div>
+      {children}
+    </label>
+  );
+}
+
+function Tile({ label, value, color = INK }) {
+  return (
+    <div style={{ background: BG, border: BORDER, borderRadius: 6, padding: "12px 14px" }}>
+      <div className="mono" style={{ fontSize: 10, color: MUTE }}>{label}</div>
+      <div className="mono" style={{ fontSize: 18, fontWeight: 700, color, marginTop: 3 }}>{value}</div>
+    </div>
+  );
+}
+
+function Calculators({ code }) {
+  const [tab_, setTab] = useState("backtest");
+  return (
+    <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <span style={{ ...sectionLabel, display: "flex", alignItems: "center", gap: 7 }}>
+          <Calculator size={14} /> CALCULATORS
+        </span>
+        <div style={{ display: "flex", border: BORDER, borderRadius: 6, overflow: "hidden" }}>
+          <button onClick={() => setTab("backtest")} style={tab(tab_ === "backtest")}>Backtest (real)</button>
+          <button onClick={() => setTab("project")} style={tab(tab_ === "project")}>Project (assumed)</button>
+        </div>
+      </div>
+      {tab_ === "backtest" ? <Backtest code={code} /> : <Project code={code} />}
+    </div>
+  );
+}
+
+function Backtest({ code }) {
+  const [mode, setMode] = useState("sip");
+  const [amount, setAmount] = useState(5000);
+  const [start, setStart] = useState(() => {
+    const d = new Date(); d.setFullYear(d.getFullYear() - 5);
+    return d.toISOString().slice(0, 10);
+  });
+  const [taxClass, setTaxClass] = useState("");   // "" = use server's classification
+  const [rate, setRate] = useState(30);
+  const [res, setRes] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const run = () => {
+    setLoading(true); setError(null);
+    const p = new URLSearchParams({ mode, amount, start, marginal_rate: rate });
+    if (taxClass) p.set("tax_class", taxClass);
+    fetch(`${API_BASE}/api/schemes/${code}/backtest?${p}`)
+      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.detail || `API ${r.status}`); return j; })
+      .then(d => { setRes(d); setError(null); })
+      .catch(e => { setError(e.message); setRes(null); })
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 16 }}>
+        <div style={{ display: "flex", border: BORDER, borderRadius: 6, overflow: "hidden", height: 36 }}>
+          {["sip", "lumpsum"].map(m => (
+            <button key={m} onClick={() => setMode(m)} style={tab(mode === m)}>{m === "sip" ? "SIP" : "Lumpsum"}</button>
+          ))}
+        </div>
+        <div style={{ width: 150 }}><Field label={mode === "sip" ? "MONTHLY AMOUNT (₹)" : "AMOUNT (₹)"}>
+          <input type="number" value={amount} onChange={e => setAmount(+e.target.value)} style={calcInput} />
+        </Field></div>
+        <div style={{ width: 160 }}><Field label="START DATE">
+          <input type="date" value={start} onChange={e => setStart(e.target.value)} style={calcInput} />
+        </Field></div>
+        <button onClick={run} disabled={loading} style={{
+          background: GOLD, color: BG, border: "none", borderRadius: 6, padding: "9px 20px",
+          fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Inter',sans-serif", height: 36,
+        }}>{loading ? "…" : "Run"}</button>
+      </div>
+
+      {error && <div className="mono" style={{ color: RED, fontSize: 12.5, padding: "8px 0" }}>{error}</div>}
+
+      {res && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 16 }}>
+            <Tile label="INVESTED" value={fmtINR(res.invested)} />
+            <Tile label="VALUE TODAY" value={fmtINR(res.current_value)} color={GOLD} />
+            <Tile label="GAIN" value={fmtINR(res.gain)} color={retColor(res.gain)} />
+            <Tile label={mode === "sip" ? "XIRR" : "CAGR"} value={`${mode === "sip" ? res.xirr_pct : res.cagr_pct}%`} color={GREEN} />
+          </div>
+
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={res.series}>
+              <defs>
+                <linearGradient id="gv" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={GOLD} stopOpacity={0.4} />
+                  <stop offset="100%" stopColor={GOLD} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="rgba(237,234,226,0.06)" vertical={false} />
+              <XAxis dataKey="date" stroke={MUTE} fontSize={10} tickLine={false} axisLine={false}
+                minTickGap={60} tickFormatter={v => v.slice(0, 7)} />
+              <YAxis stroke={MUTE} fontSize={10} tickLine={false} axisLine={false} width={54}
+                tickFormatter={v => `${Math.round(v / 1000)}k`} />
+              <Tooltip contentStyle={{ background: BG, border: "1px solid rgba(237,234,226,0.15)", borderRadius: 6, fontSize: 11 }}
+                labelStyle={{ color: MUTE }} formatter={(v, n) => [fmtINR(v), n === "value" ? "Value" : "Invested"]} />
+              <Area type="monotone" dataKey="invested" stroke={MUTE} strokeWidth={1} fill="none" strokeDasharray="3 3" />
+              <Area type="monotone" dataKey="value" stroke={GOLD} strokeWidth={1.6} fill="url(#gv)" />
+            </AreaChart>
+          </ResponsiveContainer>
+
+          {/* taxation */}
+          <div style={{ borderTop: "1px solid rgba(237,234,226,0.08)", marginTop: 14, paddingTop: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <span style={sectionLabel}>ESTIMATED TAX IF REDEEMED TODAY</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", border: BORDER, borderRadius: 6, overflow: "hidden" }}>
+                  {[["", "Auto"], ["equity", "Equity"], ["non_equity", "Non-equity"]].map(([v, l]) => (
+                    <button key={v || "auto"} onClick={() => setTaxClass(v)} style={{ ...tab(taxClass === v), padding: "5px 10px", fontSize: 11 }}>{l}</button>
+                  ))}
+                </div>
+                {(taxClass === "non_equity" || res.tax.tax_class === "non_equity") && (
+                  <input type="number" value={rate} onChange={e => setRate(+e.target.value)}
+                    title="Slab rate %" style={{ ...calcInput, width: 70 }} />
+                )}
+                <button onClick={run} style={{ ...tab(false), border: BORDER, borderRadius: 6, fontSize: 11, padding: "5px 10px" }}>Apply</button>
+              </div>
+            </div>
+            <div className="mono" style={{ display: "flex", gap: 24, marginTop: 10, fontSize: 13 }}>
+              <span>Tax: <b style={{ color: RED }}>{fmtINR(res.tax.tax)}</b></span>
+              <span style={{ color: MUTE }}>{res.tax.gain_type} · {res.tax.tax_class} · {res.tax.effective_rate_pct}% of gain</span>
+            </div>
+            <div className="mono" style={{ fontSize: 10, color: MUTE, marginTop: 8, lineHeight: 1.5 }}>
+              {res.tax.assumptions.join(" ")}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Project({ code }) {
+  const [mode, setMode] = useState("sip");
+  const [amount, setAmount] = useState(10000);
+  const [years, setYears] = useState(10);
+  const [rate, setRate] = useState(12);
+  const [target, setTarget] = useState(10000000);
+  const [corpus, setCorpus] = useState(2000000);
+  const [withdrawal, setWithdrawal] = useState(15000);
+  const [res, setRes] = useState(null);
+  const [error, setError] = useState(null);
+
+  const run = () => {
+    const p = new URLSearchParams({ mode, annual_rate: rate });
+    if (mode === "sip" || mode === "lumpsum") { p.set("amount", amount); p.set("years", years); }
+    if (mode === "goal") { p.set("target", target); p.set("years", years); }
+    if (mode === "swp") { p.set("corpus", corpus); p.set("monthly_withdrawal", withdrawal); }
+    fetch(`${API_BASE}/api/calc/project?${p}`)
+      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.detail || `API ${r.status}`); return j; })
+      .then(d => { setRes(d); setError(null); })
+      .catch(e => { setError(e.message); setRes(null); });
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        {[["sip", "SIP"], ["lumpsum", "Lumpsum"], ["swp", "SWP"], ["goal", "Goal"]].map(([m, l]) => (
+          <button key={m} onClick={() => { setMode(m); setRes(null); }} style={{ ...tab(mode === m), border: BORDER, borderRadius: 6 }}>{l}</button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
+        {(mode === "sip" || mode === "lumpsum") && (
+          <div style={{ width: 150 }}><Field label={mode === "sip" ? "MONTHLY (₹)" : "AMOUNT (₹)"}>
+            <input type="number" value={amount} onChange={e => setAmount(+e.target.value)} style={calcInput} /></Field></div>
+        )}
+        {mode === "goal" && (
+          <div style={{ width: 170 }}><Field label="TARGET CORPUS (₹)">
+            <input type="number" value={target} onChange={e => setTarget(+e.target.value)} style={calcInput} /></Field></div>
+        )}
+        {mode === "swp" && (<>
+          <div style={{ width: 160 }}><Field label="STARTING CORPUS (₹)">
+            <input type="number" value={corpus} onChange={e => setCorpus(+e.target.value)} style={calcInput} /></Field></div>
+          <div style={{ width: 150 }}><Field label="MONTHLY WITHDRAWAL (₹)">
+            <input type="number" value={withdrawal} onChange={e => setWithdrawal(+e.target.value)} style={calcInput} /></Field></div>
+        </>)}
+        {mode !== "swp" && (
+          <div style={{ width: 90 }}><Field label="YEARS">
+            <input type="number" value={years} onChange={e => setYears(+e.target.value)} style={calcInput} /></Field></div>
+        )}
+        <div style={{ width: 110 }}><Field label="ANNUAL RETURN %">
+          <input type="number" value={rate} onChange={e => setRate(+e.target.value)} style={calcInput} /></Field></div>
+        <button onClick={run} style={{
+          background: GOLD, color: BG, border: "none", borderRadius: 6, padding: "9px 20px",
+          fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Inter',sans-serif", height: 36,
+        }}>Calculate</button>
+      </div>
+
+      {error && <div className="mono" style={{ color: RED, fontSize: 12.5, padding: "8px 0" }}>{error}</div>}
+
+      {res && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+          {res.mode === "goal" && <>
+            <Tile label="MONTHLY SIP NEEDED" value={fmtINR(res.monthly_sip)} color={GOLD} />
+            <Tile label="TOTAL INVESTED" value={fmtINR(res.total_invested)} />
+            <Tile label="TARGET" value={fmtINR(res.target)} color={GREEN} />
+          </>}
+          {(res.mode === "sip" || res.mode === "lumpsum") && <>
+            <Tile label="INVESTED" value={fmtINR(res.invested)} />
+            <Tile label="PROJECTED VALUE" value={fmtINR(res.future_value)} color={GOLD} />
+            <Tile label="GAIN" value={fmtINR(res.gain)} color={GREEN} />
+          </>}
+          {res.mode === "swp" && <>
+            <Tile label="LASTS" value={res.sustained ? "Indefinitely" : `${(res.lasts_months / 12).toFixed(1)} yrs`}
+              color={res.sustained ? GREEN : GOLD} />
+            <Tile label="MONTHLY WITHDRAWAL" value={fmtINR(res.monthly_withdrawal)} />
+            <Tile label="STARTING CORPUS" value={fmtINR(res.corpus)} />
+          </>}
+        </div>
+      )}
+      <div className="mono" style={{ fontSize: 10, color: MUTE, marginTop: 12, lineHeight: 1.5 }}>
+        Projections assume a constant {rate}% annual return — an assumption for planning, not a prediction.
+        Real returns vary year to year.
       </div>
     </div>
   );

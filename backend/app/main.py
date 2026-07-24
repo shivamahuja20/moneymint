@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import Base, engine
-from .routers import funds, sectors, flows, schemes
+from .routers import funds, sectors, flows, schemes, calculators
 
 Base.metadata.create_all(bind=engine)
 
@@ -20,6 +20,7 @@ app.add_middleware(
 )
 
 app.include_router(schemes.router)
+app.include_router(calculators.router)
 app.include_router(funds.router)
 app.include_router(sectors.router)
 app.include_router(flows.router)
