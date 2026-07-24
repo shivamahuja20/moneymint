@@ -137,6 +137,7 @@ class SchemeDetail(BaseModel):
     launch_date: Optional[date] = None
     nav: Optional[float] = None
     nav_date: Optional[date] = None
+    data_quality: Optional[str] = None   # None=ok | 'stale' | 'discontinuity'
     benchmark: Optional[BenchmarkInfo] = None
     returns: list[SchemeReturnRow]
     risk: list[SchemeRiskRow]
@@ -157,6 +158,7 @@ class CompareScheme(BaseModel):
     scheme_code: str
     name: str
     category: Optional[str] = None
+    data_quality: Optional[str] = None   # None=ok | 'stale' | 'discontinuity'
     returns: list[SchemeReturnRow]
     risk: list[SchemeRiskRow]
 

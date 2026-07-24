@@ -32,6 +32,22 @@ TRADING_DAYS = 252
 MIN_RISK_POINTS = 150          # need at least ~7 months of daily NAVs for 1Y risk
 BETA_MIN_OVERLAP = 0.9         # fund/proxy return series must overlap >= 90% of window
 
+# ---------------------------------------------------------------------------
+# Data-honesty guards. Some source NAV series are unusable:
+#  * STALENESS: the latest NAV is far in the past (dead / wound-up scheme) yet
+#    the scheme still ships in AMFI's file, so it would show a stale NAV as if
+#    current. Detected from the newest nav_history date, NOT scheme_master.last_seen
+#    (which the daily sync stamps to today for every scheme in the file).
+#  * DISCONTINUITY: a segregated-portfolio / side-pocket event (or a data glitch)
+#    produces a single-day NAV jump that has no economic meaning. Any return or
+#    risk window straddling such a jump is garbage.
+# We never delete data. Instead: any period/window whose span contains a
+# discontinuity emits NOTHING (an honest null, never a fake number), and whole
+# schemes get a data_quality flag that hard-excludes them from the explorer.
+DISCONTINUITY_PCT = 0.40           # |single-day NAV change| above this is non-economic
+STALE_AFTER_DAYS = 45              # latest NAV older than this => 'stale'
+DISCONTINUITY_LOOKBACK_DAYS = 365  # a jump newer than this flags the whole scheme
+
 
 # ---------------------------------------------------------------------------
 # Pass a: point-to-point returns for every scheme, set-based SQL
@@ -59,11 +75,33 @@ CROSS JOIN LATERAL (
     ORDER BY h.date DESC LIMIT 1
 ) p
 WHERE p.nav > 0
+  -- skip the period if a NAV discontinuity sits inside the window (anchor, latest];
+  -- the two endpoints would straddle a non-economic jump -> garbage return.
+  AND NOT EXISTS (
+      SELECT 1 FROM disc_events e
+      WHERE e.scheme_code = l.scheme_code
+        AND e.date > p.date AND e.date <= l.date
+  )
+"""
+
+# One row per single-day NAV discontinuity, materialized once per run so the
+# per-period NOT EXISTS above is a cheap indexed lookup instead of a re-scan.
+BUILD_DISC_EVENTS_SQL = """
+DROP TABLE IF EXISTS disc_events;
+CREATE TEMP TABLE disc_events AS
+WITH d AS (
+    SELECT scheme_code, date,
+           nav / NULLIF(lag(nav) OVER (PARTITION BY scheme_code ORDER BY date), 0) - 1 AS chg
+    FROM nav_history
+)
+SELECT scheme_code, date FROM d WHERE abs(chg) > :disc;
+CREATE INDEX ix_disc_events ON disc_events (scheme_code, date);
 """
 
 
 def compute_scheme_returns(conn) -> int:
     conn.execute(text("DELETE FROM scheme_returns"))
+    conn.execute(text(BUILD_DISC_EVENTS_SQL), {"disc": DISCONTINUITY_PCT})
     total = 0
     for period, days in PERIODS_DAYS.items():
         res = conn.execute(text(RETURNS_SQL), {
@@ -93,6 +131,9 @@ def window_metrics(dates, rets, navs, start_date):
     r = rets[idx:]
     n = navs[idx:]
     if len(r) < MIN_RISK_POINTS:
+        return None
+    # a discontinuity inside the window makes stdev/sharpe/drawdown meaningless
+    if float(np.abs(r).max()) > DISCONTINUITY_PCT:
         return None
     stdev = float(np.std(r, ddof=1) * math.sqrt(TRADING_DAYS) * 100)
     years = len(r) / TRADING_DAYS
@@ -214,10 +255,50 @@ def compute_category_stats(conn) -> int:
                count(*), max(r.as_of_date)
         FROM scheme_returns r
         JOIN scheme_master m ON m.scheme_code = r.scheme_code
-        WHERE m.category IS NOT NULL
+        WHERE m.category IS NOT NULL AND m.data_quality IS NULL
         GROUP BY m.category, r.period
     """))
     return res.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Pass d: scheme-level data-quality flag (drives the explorer hard-exclude)
+# ---------------------------------------------------------------------------
+
+def flag_data_quality(conn) -> tuple[int, int]:
+    """Recompute scheme_master.data_quality from scratch (rebuild-safe).
+
+    'stale'         -> newest NAV older than STALE_AFTER_DAYS (or no NAV at all).
+    'discontinuity' -> a live scheme whose NAV took a non-economic single-day jump
+                       inside the last DISCONTINUITY_LOOKBACK_DAYS (e.g. a recent
+                       side-pocket), so its headline returns/risk are unusable.
+    Precedence: 'stale' wins (a dead fund's staleness is the headline fact)."""
+    today = datetime.date.today()
+    conn.execute(text("UPDATE scheme_master SET data_quality = NULL WHERE data_quality IS NOT NULL"))
+
+    n_stale = conn.execute(text("""
+        UPDATE scheme_master m SET data_quality = 'stale'
+        WHERE COALESCE(
+            (SELECT max(date) FROM nav_history h WHERE h.scheme_code = m.scheme_code),
+            DATE '1900-01-01'
+        ) < :cutoff
+    """), {"cutoff": today - datetime.timedelta(days=STALE_AFTER_DAYS)}).rowcount
+
+    n_disc = conn.execute(text("""
+        UPDATE scheme_master m SET data_quality = 'discontinuity'
+        WHERE m.data_quality IS NULL
+          AND EXISTS (
+              SELECT 1 FROM (
+                  SELECT nav / NULLIF(lag(nav) OVER (ORDER BY date), 0) - 1 AS chg
+                  FROM nav_history h
+                  WHERE h.scheme_code = m.scheme_code AND h.date >= :lookback
+              ) d
+              WHERE abs(d.chg) > :disc
+          )
+    """), {"lookback": today - datetime.timedelta(days=DISCONTINUITY_LOOKBACK_DAYS),
+           "disc": DISCONTINUITY_PCT}).rowcount
+
+    return n_stale, n_disc
 
 
 def wire_legacy_fund_returns(conn) -> int:
@@ -250,6 +331,9 @@ def run():
     with engine.begin() as conn:
         n_risk = compute_scheme_risk(conn)
         print(f"scheme_risk: {n_risk:,} rows.")
+    with engine.begin() as conn:
+        n_stale, n_disc = flag_data_quality(conn)
+        print(f"data_quality: {n_stale:,} stale, {n_disc:,} discontinuity (excluded from explorer).")
     with engine.begin() as conn:
         n_cat = compute_category_stats(conn)
         n_legacy = wire_legacy_fund_returns(conn)

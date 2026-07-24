@@ -34,11 +34,13 @@ SORT_COLUMNS = {
 def facets(db: Session = Depends(get_db)):
     cats = db.execute(text(
         "SELECT category AS value, count(*) AS count FROM scheme_master "
-        "WHERE is_active AND category IS NOT NULL GROUP BY category ORDER BY category"
+        "WHERE is_active AND data_quality IS NULL AND category IS NOT NULL "
+        "GROUP BY category ORDER BY category"
     )).mappings().all()
     amcs = db.execute(text(
         "SELECT amc AS value, count(*) AS count FROM scheme_master "
-        "WHERE is_active AND amc IS NOT NULL GROUP BY amc ORDER BY amc"
+        "WHERE is_active AND data_quality IS NULL AND amc IS NOT NULL "
+        "GROUP BY amc ORDER BY amc"
     )).mappings().all()
     return schemas.FacetsResponse(
         categories=[schemas.FacetValue(**c) for c in cats],
@@ -61,12 +63,14 @@ def compare(codes: str = Query(..., description="Comma-separated scheme codes, m
     out = []
     for code in code_list:
         m = db.execute(text(
-            "SELECT scheme_code, name, category FROM scheme_master WHERE scheme_code=:c"
+            "SELECT scheme_code, name, category, data_quality "
+            "FROM scheme_master WHERE scheme_code=:c"
         ), {"c": code}).mappings().first()
         if not m:
             raise HTTPException(404, f"Unknown scheme code '{code}'.")
         out.append(schemas.CompareScheme(
             scheme_code=m["scheme_code"], name=m["name"], category=m["category"],
+            data_quality=m["data_quality"],
             returns=_returns_for(db, code, m["category"]),
             risk=_risk_for(db, code),
         ))
@@ -93,7 +97,9 @@ def list_schemes(
         raise HTTPException(400, f"Invalid sort '{sort}'.")
     order_sql = "ASC" if order.lower() == "asc" else "DESC"
 
-    where = ["m.is_active"]
+    # data_quality IS NULL hard-excludes stale / discontinuity-corrupted schemes
+    # from the explorer so garbage metrics never surface or rank (see compute_metrics).
+    where = ["m.is_active", "m.data_quality IS NULL"]
     params: dict = {}
     if q:
         where.append("(m.name ILIKE :q OR m.amc ILIKE :q)")
@@ -145,7 +151,8 @@ def list_schemes(
 @router.get("/{code}", response_model=schemas.SchemeDetail)
 def scheme_detail(code: str, db: Session = Depends(get_db)):
     m = db.execute(text("""
-        SELECT scheme_code, name, amc, category, plan_type, option_type, isin, launch_date
+        SELECT scheme_code, name, amc, category, plan_type, option_type, isin,
+               launch_date, data_quality
         FROM scheme_master WHERE scheme_code = :c
     """), {"c": code}).mappings().first()
     if not m:
@@ -165,6 +172,7 @@ def scheme_detail(code: str, db: Session = Depends(get_db)):
         launch_date=m["launch_date"],
         nav=nav["nav"] if nav else None,
         nav_date=nav["date"] if nav else None,
+        data_quality=m["data_quality"],
         benchmark=schemas.BenchmarkInfo(**bench) if bench else None,
         returns=_returns_for(db, code, m["category"]),
         risk=_risk_for(db, code),

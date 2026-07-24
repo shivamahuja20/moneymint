@@ -82,6 +82,11 @@ class SchemeMaster(Base):
     benchmark_name = Column(String)
     risk_level = Column(String)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
+    # data honesty: NULL = usable; set nightly by compute_metrics.flag_data_quality.
+    #   'stale'         -> latest NAV is too old to present as current (dead/wound-up)
+    #   'discontinuity' -> a recent non-economic NAV jump (side-pocket) corrupts metrics
+    # Non-NULL schemes are hard-excluded from the explorer list/facets/rankings.
+    data_quality = Column(String, index=True)
     fund_group_id = Column(String, index=True)          # links Direct/Regular x Growth/IDCW variants
     # backfill bookkeeping — makes the MFAPI historical backfill resumable
     backfill_status = Column(String, index=True)        # None | 'done' | 'no_data' | 'error'

@@ -43,10 +43,22 @@ def create_nav_history(conn):
     ))
 
 
+def migrate(conn):
+    """Idempotent column adds for tables create_all() won't alter in place."""
+    conn.execute(text(
+        "ALTER TABLE scheme_master ADD COLUMN IF NOT EXISTS data_quality varchar;"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_scheme_master_data_quality "
+        "ON scheme_master (data_quality);"
+    ))
+
+
 def main():
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
         create_nav_history(conn)
+        migrate(conn)
     print("Schema created (ORM tables + partitioned nav_history "
           f"{FIRST_YEAR}-{LAST_YEAR}).")
 
