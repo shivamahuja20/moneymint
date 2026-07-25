@@ -224,6 +224,39 @@ def scheme_nav(code: str, range: str = Query("3Y"), db: Session = Depends(get_db
 
 
 # ---------------------------------------------------------------------------
+# /{code}/holdings — latest monthly portfolio (Phase 8)
+# ---------------------------------------------------------------------------
+@router.get("/{code}/holdings", response_model=schemas.HoldingsResponse)
+def scheme_holdings(code: str, limit: int = Query(25, ge=1, le=200),
+                    db: Session = Depends(get_db)):
+    exists = db.execute(text("SELECT 1 FROM scheme_master WHERE scheme_code=:c"),
+                        {"c": code}).first()
+    if not exists:
+        raise HTTPException(404, f"Unknown scheme code '{code}'.")
+
+    as_of = db.execute(text(
+        "SELECT max(as_of_date) FROM holdings WHERE scheme_code=:c"), {"c": code}).scalar()
+    if as_of is None:
+        # honest empty shape — holdings not available for this scheme yet
+        return schemas.HoldingsResponse(scheme_code=code, as_of_date=None,
+                                        holdings=[], sector_allocation=[])
+
+    holdings = db.execute(text(
+        "SELECT instrument_name, isin, sector, pct_of_aum, market_value_cr FROM holdings "
+        "WHERE scheme_code=:c AND as_of_date=:d ORDER BY pct_of_aum DESC LIMIT :lim"),
+        {"c": code, "d": as_of, "lim": limit}).mappings().all()
+    sectors = db.execute(text(
+        "SELECT sector, pct_of_aum FROM sector_allocation WHERE scheme_code=:c AND as_of_date=:d "
+        "ORDER BY pct_of_aum DESC"), {"c": code, "d": as_of}).mappings().all()
+
+    return schemas.HoldingsResponse(
+        scheme_code=code, as_of_date=as_of,
+        holdings=[schemas.HoldingRow(**h) for h in holdings],
+        sector_allocation=[schemas.SectorRow(**s) for s in sectors],
+    )
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 def _returns_for(db, code, category):

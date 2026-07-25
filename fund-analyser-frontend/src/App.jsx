@@ -262,6 +262,7 @@ function SchemeDetail({ code, onBack }) {
   const [error, setError] = useState(null);
   const [range, setRange] = useState("3Y");
   const [nav, setNav] = useState(null);
+  const [holdings, setHoldings] = useState(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/schemes/${code}`)
@@ -274,6 +275,12 @@ function SchemeDetail({ code, onBack }) {
     fetch(`${API_BASE}/api/schemes/${code}/nav?range=${range}`)
       .then(r => r.json()).then(setNav).catch(() => {});
   }, [code, range]);
+
+  useEffect(() => {
+    setHoldings(null);
+    fetch(`${API_BASE}/api/schemes/${code}/holdings?limit=10`)
+      .then(r => r.json()).then(setHoldings).catch(() => {});
+  }, [code]);
 
   if (error) return <div style={{ padding: 40, color: RED }} className="mono">{error}</div>;
   if (!d) return <div style={{ padding: 40, color: MUTE }} className="mono">Loading…</div>;
@@ -410,7 +417,68 @@ function SchemeDetail({ code, onBack }) {
         </div>
       </div>
 
+      <HoldingsPanels holdings={holdings} />
+
       <Calculators code={code} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Holdings + sector allocation (Phase 8)
+// ---------------------------------------------------------------------------
+function HoldingsPanels({ holdings }) {
+  if (holdings == null) return null;  // still loading
+  const has = holdings.holdings && holdings.holdings.length > 0;
+  if (!has) {
+    return (
+      <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginTop: 20 }}>
+        <span style={sectionLabel}>PORTFOLIO HOLDINGS</span>
+        <div className="mono" style={{ fontSize: 12.5, color: MUTE, marginTop: 10 }}>
+          Portfolio holdings not yet available for this scheme.
+        </div>
+      </div>
+    );
+  }
+  const maxPct = Math.max(...holdings.sector_allocation.map(s => s.pct_of_aum), 1);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20, marginTop: 20 }}>
+      {/* top holdings */}
+      <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span style={sectionLabel}>TOP HOLDINGS</span>
+          <span className="mono" style={{ fontSize: 10.5, color: MUTE }}>as of {holdings.as_of_date}</span>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          {holdings.holdings.map((h, i) => (
+            <div key={i} className="ledger-line mono" style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, padding: "8px 0", fontSize: 13 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {h.instrument_name}
+                <span style={{ color: MUTE, fontSize: 10.5 }}> · {h.sector}</span>
+              </span>
+              <span style={{ fontWeight: 600, color: GOLD }}>{h.pct_of_aum}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* sector allocation */}
+      <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20 }}>
+        <span style={sectionLabel}>SECTOR ALLOCATION</span>
+        <div style={{ marginTop: 12 }}>
+          {holdings.sector_allocation.slice(0, 10).map((s, i) => (
+            <div key={i} className="mono" style={{ padding: "5px 0", fontSize: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{s.sector}</span>
+                <span style={{ color: MUTE }}>{s.pct_of_aum.toFixed(1)}%</span>
+              </div>
+              <div style={{ height: 4, background: "rgba(237,234,226,0.08)", borderRadius: 2 }}>
+                <div style={{ height: 4, width: `${(s.pct_of_aum / maxPct) * 100}%`, background: GREEN, borderRadius: 2 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

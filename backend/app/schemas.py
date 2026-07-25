@@ -174,3 +174,23 @@ class CompareScheme(BaseModel):
 
 class CompareResponse(BaseModel):
     schemes: list[CompareScheme]
+
+
+class HoldingRow(BaseModel):
+    instrument_name: str
+    isin: Optional[str] = None
+    sector: Optional[str] = None
+    pct_of_aum: Optional[float] = None
+    market_value_cr: Optional[float] = None
+
+
+class SectorRow(BaseModel):
+    sector: str
+    pct_of_aum: float
+
+
+class HoldingsResponse(BaseModel):
+    scheme_code: str
+    as_of_date: Optional[date] = None
+    holdings: list[HoldingRow]
+    sector_allocation: list[SectorRow]
