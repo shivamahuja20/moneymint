@@ -28,7 +28,9 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " \
 ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 # credit-rating strings that appear in the Industry column for debt/MMI holdings
 RATING_RE = re.compile(r"CRISIL|ICRA|CARE|FITCH|IND\b|A1\+|AAA|AA\+|SOV|UNRATED", re.I)
-DATE_RE = re.compile(r"as on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})", re.I)
+# "as on/at" followed by a date in any common wording (June 30, 2026 | 30-Jun-2026 | 30 June 2026)
+DATE_RE = re.compile(
+    r"as\s+(?:on|at)\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[-\s][A-Za-z]+[-\s]\d{4})", re.I)
 
 HEADER_FIELDS = {
     "name": ("name of the instrument", "name of instrument"),
@@ -83,6 +85,7 @@ def _column_map(header_row):
 
 
 def extract_as_of_date(ws, scan=8):
+    from dateutil import parser as dateparser
     for row in ws.iter_rows(min_row=1, max_row=scan, values_only=True):
         for c in row:
             if not c:
@@ -90,9 +93,8 @@ def extract_as_of_date(ws, scan=8):
             m = DATE_RE.search(str(c))
             if m:
                 try:
-                    return datetime.datetime.strptime(
-                        m.group(1).replace(",", ""), "%B %d %Y").date()
-                except ValueError:
+                    return dateparser.parse(m.group(1), dayfirst=True).date()
+                except (ValueError, OverflowError):
                     pass
     return None
 
@@ -141,7 +143,7 @@ def parse_standard_sheet(ws):
 
     as_of = extract_as_of_date(ws)
 
-    rows = []
+    raw = []
     for row in ws.iter_rows(min_row=hidx + 1, values_only=True):
         isin = row[cols["isin"]] if cols["isin"] < len(row) else None
         if not is_isin(isin):
@@ -152,13 +154,21 @@ def parse_standard_sheet(ws):
         pct = _num(row[cols["pct"]]) if cols["pct"] < len(row) else None
         mv = _num(row[cols["market_value"]]) if cols.get("market_value", 99) < len(row) else None
         industry = row[cols["industry"]] if cols.get("industry", 99) < len(row) else None
-        rows.append({
-            "instrument_name": str(name).strip(),
-            "isin": str(isin).strip(),
-            "sector": clean_sector(industry),
-            "pct_of_aum": round(pct * 100, 4) if pct is not None else 0.0,
-            "market_value_cr": round(mv / 100, 2) if mv is not None else None,
-        })
+        raw.append((str(name).strip(), str(isin).strip(), industry, pct, mv))
+
+    # AMCs differ: some store "% to NAV" as a fraction (0.0833), some as a percent
+    # (9.18). Detect from the total — a fund's weights sum to ~1 or ~100 — and scale
+    # everything to true percent uniformly.
+    pct_sum = sum(p for *_, p, _ in raw if p)
+    scale = 100.0 if 0 < pct_sum <= 3 else 1.0
+
+    rows = [{
+        "instrument_name": name,
+        "isin": isin,
+        "sector": clean_sector(industry),
+        "pct_of_aum": round(pct * scale, 4) if pct is not None else 0.0,
+        "market_value_cr": round(mv / 100, 2) if mv is not None else None,
+    } for name, isin, industry, pct, mv in raw]
     return scheme_name, as_of, rows
 
 
@@ -175,23 +185,41 @@ def _norm(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
 
 
+def _resolve_codes(target: str, rows):
+    """Pure matcher (no DB, so it's unit-testable). `target` is the normalised sheet
+    scheme name; `rows` is [(scheme_code, master_name)] for the AMC. Returns the
+    scheme_codes of the SINGLE fund whose normalised name matches — all its
+    Direct/Regular x Growth/IDCW variants share one normalised name, so they come
+    back together and holdings attach to every variant.
+
+    Honest by design: it refuses to guess. A name too generic to be safe (bad header
+    extraction, e.g. just "hdfc") or a match ambiguous across two different funds
+    returns [] — so a portfolio is never silently pinned to the wrong scheme.
+    Previously a loose `startswith(target)` could mass-attach one sheet to every fund
+    sharing a prefix."""
+    if not target or len(target.split()) < 2:
+        return []                      # too generic — don't risk a mass mis-match
+    groups: dict[str, list] = {}
+    for code, name in rows:
+        groups.setdefault(_norm(name), []).append(code)
+    # 1) exact normalised-name match wins outright (the common case)
+    if target in groups:
+        return groups[target]
+    # 2) else a UNIQUE token-boundary prefix match — tolerates trailing descriptors
+    #    ("... Monthly Portfolio") on either side, but bails if >1 fund could match
+    cands = [n for n in groups
+             if target.startswith(n + " ") or n.startswith(target + " ")]
+    return groups[cands[0]] if len(cands) == 1 else []
+
+
 def match_scheme_codes(db, amc: str, sheet_scheme_name: str):
-    """All scheme_codes (Direct/Regular x Growth/IDCW) of the fund whose portfolio
-    this sheet is — matched by normalised-name prefix within the AMC. Holdings are
-    shared across a fund's plan/option variants, so we attach to all of them."""
+    """scheme_codes of the fund whose portfolio this sheet is, within the AMC.
+    Thin DB wrapper over _resolve_codes (which holds the matching logic)."""
     from sqlalchemy import text
-    target = _norm(sheet_scheme_name)
-    if not target:
-        return []
     rows = db.execute(text(
         "SELECT scheme_code, name FROM scheme_master WHERE amc = :amc"), {"amc": amc}
     ).all()
-    out = []
-    for code, name in rows:
-        n = _norm(name)
-        if n == target or n.startswith(target + " ") or n.startswith(target):
-            out.append(code)
-    return out
+    return _resolve_codes(_norm(sheet_scheme_name), [(c, n) for c, n in rows])
 
 
 def write_holdings(conn, scheme_code: str, as_of_date, rows):

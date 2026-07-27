@@ -19,10 +19,10 @@ import openpyxl
 
 from app.db import engine, SessionLocal
 from app.ingestion.holdings import base
-from app.ingestion.holdings.parsers import ppfas
+from app.ingestion.holdings.parsers import ppfas, hdfc
 
 # registry — add a module here as each AMC parser is written
-PARSERS = [ppfas]
+PARSERS = [ppfas, hdfc]
 
 
 def process_amc(mod) -> dict:
@@ -32,8 +32,13 @@ def process_amc(mod) -> dict:
     try:
         files = mod.discover()
         for f in files:
+            try:
+                path = base.cache_workbook(mod.AMC_SLUG, f["filename"], f["url"])
+            except Exception as e:  # a single missing/404 file must not abort the AMC
+                stats.setdefault("skipped_files", 0)
+                stats["skipped_files"] += 1
+                continue
             stats["files"] += 1
-            path = base.cache_workbook(mod.AMC_SLUG, f["filename"], f["url"])
             wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
             for ws in wb.worksheets:
                 scheme_name, as_of, rows = base.parse_standard_sheet(ws)

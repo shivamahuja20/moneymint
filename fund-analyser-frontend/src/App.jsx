@@ -3,7 +3,7 @@ import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import {
-  Search, ArrowLeft, ArrowUp, ArrowDown, X, GitCompare, Calculator,
+  Search, ArrowLeft, ArrowUp, ArrowDown, X, GitCompare, Calculator, AlertTriangle,
 } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
@@ -29,6 +29,27 @@ function pctColor(v) { return v == null ? MUTE : v >= 67 ? GREEN : v >= 33 ? GOL
 function fmtINR(v) {
   if (v == null) return "—";
   return "₹" + Math.round(v).toLocaleString("en-IN");
+}
+
+// Honest label for schemes the data-quality guard flagged. These are hidden from
+// the explorer but still reachable by direct link, so the detail page must say why.
+function dataQualityNote(dq, navDate) {
+  if (dq === "stale")
+    return {
+      label: "Stale — likely dormant or wound-up",
+      text: `The most recent NAV is from ${navDate || "an old date"}. This scheme has stopped `
+        + "reporting fresh NAVs, so it's excluded from the explorer and rankings. The figures "
+        + "below are historical and may not reflect anything current.",
+    };
+  if (dq === "discontinuity")
+    return {
+      label: "NAV discontinuity — some metrics withheld",
+      text: "This scheme's NAV history has a large single-day jump with no economic meaning "
+        + "(typically a segregated-portfolio / side-pocket event or a data restatement). "
+        + "Returns and risk over any period spanning that jump are omitted rather than shown "
+        + "as misleading numbers, and the scheme is excluded from the explorer.",
+    };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +326,25 @@ function SchemeDetail({ code, onBack }) {
           <div className="mono" style={{ fontSize: 26, fontWeight: 600 }}>{d.nav != null ? `₹${d.nav}` : "—"}</div>
         </div>
       </div>
+
+      {/* data-quality banner — only shown for flagged (stale / discontinuity) schemes */}
+      {(() => {
+        const note = dataQualityNote(d.data_quality, d.nav_date);
+        if (!note) return null;
+        return (
+          <div style={{
+            background: "rgba(198,82,75,0.08)", border: "1px solid rgba(198,82,75,0.4)",
+            borderRadius: 8, padding: "13px 16px", marginBottom: 20,
+            display: "flex", gap: 12, alignItems: "flex-start",
+          }}>
+            <AlertTriangle size={17} color={RED} style={{ marginTop: 1, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: RED, marginBottom: 3 }}>{note.label}</div>
+              <div className="mono" style={{ fontSize: 11.5, color: INK, lineHeight: 1.55 }}>{note.text}</div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* NAV chart */}
       <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginBottom: 20 }}>
@@ -824,9 +864,30 @@ const backBtn = {
 // ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
+// minimal deep-linking: ?code=<scheme> opens that scheme's detail directly, so
+// funds (including guard-flagged ones hidden from the explorer) are shareable /
+// bookmarkable. Kept intentionally tiny — no router dependency.
+function viewFromUrl() {
+  const code = new URLSearchParams(window.location.search).get("code");
+  return code ? { page: "detail", code } : { page: "explorer" };
+}
+
 export default function App() {
-  const [view, setView] = useState({ page: "explorer" });
+  const [view, setView] = useState(viewFromUrl);
   const [compareCodes, setCompareCodes] = useState([]);
+
+  const go = (next) => {
+    const qs = next.page === "detail" ? `?code=${encodeURIComponent(next.code)}` : "";
+    window.history.pushState(next, "", qs || window.location.pathname);
+    setView(next);
+  };
+
+  // keep the browser back/forward buttons in sync with the view
+  useEffect(() => {
+    const onPop = () => setView(viewFromUrl());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const toggleCompare = (code) => setCompareCodes(prev =>
     prev.includes(code) ? prev.filter(c => c !== code) : prev.length >= 4 ? prev : [...prev, code]);
@@ -840,7 +901,7 @@ export default function App() {
         padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
-          onClick={() => setView({ page: "explorer" })}>
+          onClick={() => go({ page: "explorer" })}>
           <div style={{
             width: 28, height: 28, borderRadius: 4, background: "linear-gradient(135deg,#C9A227,#8a6f1a)",
             display: "flex", alignItems: "center", justifyContent: "center",
@@ -855,17 +916,17 @@ export default function App() {
 
       {view.page === "explorer" && (
         <Explorer
-          onSelectScheme={code => setView({ page: "detail", code })}
+          onSelectScheme={code => go({ page: "detail", code })}
           compareCodes={compareCodes}
           toggleCompare={toggleCompare}
-          onOpenCompare={() => setView({ page: "compare" })}
+          onOpenCompare={() => go({ page: "compare" })}
         />
       )}
       {view.page === "detail" && (
-        <SchemeDetail code={view.code} onBack={() => setView({ page: "explorer" })} />
+        <SchemeDetail code={view.code} onBack={() => go({ page: "explorer" })} />
       )}
       {view.page === "compare" && (
-        <Compare codes={compareCodes} onBack={() => setView({ page: "explorer" })} />
+        <Compare codes={compareCodes} onBack={() => go({ page: "explorer" })} />
       )}
     </div>
   );
