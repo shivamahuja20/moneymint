@@ -15,14 +15,12 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-import openpyxl
-
 from app.db import engine, SessionLocal
 from app.ingestion.holdings import base
-from app.ingestion.holdings.parsers import ppfas, hdfc
+from app.ingestion.holdings.parsers import ppfas, hdfc, nippon
 
 # registry — add a module here as each AMC parser is written
-PARSERS = [ppfas, hdfc]
+PARSERS = [ppfas, hdfc, nippon]
 
 
 def process_amc(mod) -> dict:
@@ -39,7 +37,7 @@ def process_amc(mod) -> dict:
                 stats["skipped_files"] += 1
                 continue
             stats["files"] += 1
-            wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+            wb = base.open_workbook(path)
             for ws in wb.worksheets:
                 scheme_name, as_of, rows = base.parse_standard_sheet(ws)
                 if not rows or not scheme_name:

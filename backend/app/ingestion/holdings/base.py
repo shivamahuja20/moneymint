@@ -12,6 +12,7 @@ a numeric weight. Section headers, sub-totals, grand totals, derivatives and the
 notes blocks all lack an ISIN in the ISIN column and are skipped — never summed.
 """
 import os
+import io
 import re
 import datetime
 
@@ -28,9 +29,10 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " \
 ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 # credit-rating strings that appear in the Industry column for debt/MMI holdings
 RATING_RE = re.compile(r"CRISIL|ICRA|CARE|FITCH|IND\b|A1\+|AAA|AA\+|SOV|UNRATED", re.I)
-# "as on/at" followed by a date in any common wording (June 30, 2026 | 30-Jun-2026 | 30 June 2026)
+# "as on/at" followed by a date in any common wording
+# (June 30, 2026 | June 30,2026 | 30-Jun-2026 | 30 June 2026)
 DATE_RE = re.compile(
-    r"as\s+(?:on|at)\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[-\s][A-Za-z]+[-\s]\d{4})", re.I)
+    r"as\s+(?:on|at)\s+([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{1,2}[-\s][A-Za-z]+[-\s]\d{4})", re.I)
 
 HEADER_FIELDS = {
     "name": ("name of the instrument", "name of instrument"),
@@ -43,6 +45,15 @@ HEADER_FIELDS = {
 
 def is_isin(v) -> bool:
     return bool(v) and bool(ISIN_RE.match(str(v).strip()))
+
+
+def open_workbook(path):
+    """Load a workbook by CONTENT, not extension. Some AMCs (e.g. Nippon) serve a
+    modern .xlsx under a .xls filename; openpyxl rejects the .xls path outright, so
+    we hand it the bytes via BytesIO. Genuinely old OLE .xls would still raise, and
+    the runner's per-file guard skips it."""
+    with open(path, "rb") as f:
+        return openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True, read_only=True)
 
 
 def cache_workbook(amc_slug: str, filename: str, url: str) -> str:
@@ -131,12 +142,15 @@ def parse_standard_sheet(ws):
     if "name" not in cols or "isin" not in cols or "pct" not in cols:
         return None, None, []
 
-    # scheme name = first non-empty cell above the header row
+    # scheme name = first cell above the header that looks like a fund name
+    # (multi-word + alphabetic). Requiring a space skips internal codes some AMCs
+    # put in the first column (e.g. Nippon's "RLMF015" beside the real name).
     scheme_name = None
     for row in ws.iter_rows(min_row=1, max_row=hidx - 1, values_only=True):
         for c in row:
-            if c and len(str(c).strip()) > 5:
-                scheme_name = str(c).strip()
+            s = str(c).strip() if c is not None else ""
+            if len(s) > 5 and " " in s and re.search(r"[A-Za-z]{3}", s):
+                scheme_name = s
                 break
         if scheme_name:
             break
@@ -177,7 +191,12 @@ def parse_standard_sheet(ws):
 # ---------------------------------------------------------------------------
 _STRIP = re.compile(
     r"\(.*?\)|-\s*(direct|regular)\s*plan|direct|regular|growth|idcw|dividend|"
-    r"payout|reinvestment|option|plan|fund", re.I)
+    r"payout|reinvestment|option|plan|fund|"
+    # IDCW payout-frequency qualifiers: these distinguish *options* of one fund,
+    # not different funds, so stripping them collapses e.g. "…Monthly IDCW" and
+    # "…Quarterly IDCW" onto the same scheme the monthly portfolio sheet names.
+    r"\b(daily|weekly|fortnightly|monthly|quarterly|half\s*yearly|yearly|annual|normal)\b",
+    re.I)
 
 
 def _norm(name: str) -> str:
