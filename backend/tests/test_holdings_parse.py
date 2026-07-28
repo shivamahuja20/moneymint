@@ -53,6 +53,32 @@ def test_parses_nippon_style_layout():
     assert top["market_value_cr"] == round(115593.25 / 100, 2)
 
 
+def _sbi_style_sheet():
+    """SBI shape: AMC name line to skip, 'Scheme Name :' label, '% to AUM' header,
+    and the statement date as a real date cell beside an 'AS ON' label."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["SBI Mutual Fund", "133"])
+    ws.append(["SCHEME NAME :", "SBI Banking And Financial Services Fund"])
+    ws.append(["PORTFOLIO STATEMENT AS ON", datetime.datetime(2026, 6, 30)])
+    ws.append([None])
+    ws.append([None, None, "Name of the Instrument / Issuer", "ISIN",
+               "Rating / Industry^", "Quantity", "Market value (Rs. in Lakhs)", "% to AUM"])
+    ws.append([None, None, "EQUITY & EQUITY RELATED"])
+    ws.append([None, None, "HDFC Bank Ltd.", "INE040A01034", "Banks", 100, 18150.0, 18.15])
+    ws.append([None, None, "ICICI Bank Ltd.", "INE090A01021", "Banks", 90, 13400.0, 13.40])
+    return ws
+
+
+def test_parses_sbi_style_layout():
+    name, as_of, rows = base.parse_standard_sheet(_sbi_style_sheet())
+    # takes the "Scheme Name :" value, not the "SBI Mutual Fund" AMC line
+    assert name == "SBI Banking And Financial Services Fund"
+    assert as_of == datetime.date(2026, 6, 30)   # from the date cell
+    assert len(rows) == 2                          # '% to AUM' column recognised
+    assert rows[0]["instrument_name"] == "HDFC Bank Ltd." and rows[0]["pct_of_aum"] == 18.15
+
+
 def test_date_wordings():
     from app.ingestion.holdings.base import DATE_RE
     from dateutil import parser as dp

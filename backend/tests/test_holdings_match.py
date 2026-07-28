@@ -54,3 +54,10 @@ def test_ambiguous_prefix_is_refused():
 
 def test_unknown_fund_matches_nothing():
     assert _match("HDFC Balanced Advantage Fund") == set()
+
+
+def test_and_ampersand_equivalence():
+    # AMCs write "&" and "And" interchangeably; both must resolve to the same fund
+    rows = [("X", "SBI Banking & Financial Services Fund - Direct Plan - Growth"),
+            ("Y", "SBI Banking & Financial Services Fund - Regular Plan - Growth")]
+    assert set(_resolve_codes(_norm("SBI Banking And Financial Services Fund"), rows)) == {"X", "Y"}

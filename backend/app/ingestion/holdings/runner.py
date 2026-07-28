@@ -17,10 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from app.db import engine, SessionLocal
 from app.ingestion.holdings import base
-from app.ingestion.holdings.parsers import ppfas, hdfc, nippon
+from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi
 
 # registry — add a module here as each AMC parser is written
-PARSERS = [ppfas, hdfc, nippon]
+PARSERS = [ppfas, hdfc, nippon, sbi]
 
 
 def process_amc(mod) -> dict:

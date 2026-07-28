@@ -39,7 +39,7 @@ HEADER_FIELDS = {
     "isin": ("isin",),
     "industry": ("industry", "rating"),
     "market_value": ("market", "fair value"),
-    "pct": ("% to net", "% of net", "% to nav"),
+    "pct": ("% to net", "% of net", "% to nav", "% to aum", "% of aum", "% to total"),
 }
 
 
@@ -97,7 +97,17 @@ def _column_map(header_row):
 
 def extract_as_of_date(ws, scan=8):
     from dateutil import parser as dateparser
-    for row in ws.iter_rows(min_row=1, max_row=scan, values_only=True):
+    rows = list(ws.iter_rows(min_row=1, max_row=scan, values_only=True))
+    # (a) a real date/datetime cell in the header region — SBI puts the statement
+    #     date as a date value beside a "PORTFOLIO STATEMENT AS ON" label.
+    for row in rows:
+        for c in row:
+            if isinstance(c, datetime.datetime):
+                return c.date()
+            if isinstance(c, datetime.date):
+                return c
+    # (b) "as on <date>" written inside a text cell (PPFAS/HDFC/Nippon)
+    for row in rows:
         for c in row:
             if not c:
                 continue
@@ -128,6 +138,36 @@ def _num(v):
         return None
 
 
+# "<AMC> Mutual Fund" on its own is the house name, not a scheme — don't take it
+_AMC_LINE = re.compile(r"^[\w .&'-]{0,45}\bmutual fund$", re.I)
+
+
+def _extract_scheme_name(ws, hidx):
+    """The fund name from the rows above the header. Two shapes are common:
+    an explicit 'Scheme Name : <fund>' label (e.g. SBI), or the fund name sitting
+    as the first real cell (e.g. PPFAS/HDFC/Nippon). Skip a bare '<AMC> Mutual Fund'
+    line and internal codes (single tokens)."""
+    rows = [[(str(c).strip() if c is not None else "") for c in row]
+            for row in ws.iter_rows(min_row=1, max_row=hidx - 1, values_only=True)]
+    # 1) explicit "Scheme Name" label — value after the colon or in a later cell
+    for cells in rows:
+        for j, cell in enumerate(cells):
+            if "scheme name" in cell.lower():
+                after = cell.split(":", 1)[1].strip() if ":" in cell else ""
+                if len(after) > 3:
+                    return after
+                for k in range(j + 1, len(cells)):
+                    if len(cells[k]) > 3:
+                        return cells[k]
+    # 2) fallback — first multi-word alphabetic cell that isn't the AMC's own name
+    for cells in rows:
+        for s in cells:
+            if len(s) > 5 and " " in s and re.search(r"[A-Za-z]{3}", s) \
+                    and not _AMC_LINE.match(s):
+                return s
+    return None
+
+
 def parse_standard_sheet(ws):
     """Parse one SEBI-template sheet -> (scheme_name, as_of_date, [holding dict]).
 
@@ -142,18 +182,7 @@ def parse_standard_sheet(ws):
     if "name" not in cols or "isin" not in cols or "pct" not in cols:
         return None, None, []
 
-    # scheme name = first cell above the header that looks like a fund name
-    # (multi-word + alphabetic). Requiring a space skips internal codes some AMCs
-    # put in the first column (e.g. Nippon's "RLMF015" beside the real name).
-    scheme_name = None
-    for row in ws.iter_rows(min_row=1, max_row=hidx - 1, values_only=True):
-        for c in row:
-            s = str(c).strip() if c is not None else ""
-            if len(s) > 5 and " " in s and re.search(r"[A-Za-z]{3}", s):
-                scheme_name = s
-                break
-        if scheme_name:
-            break
+    scheme_name = _extract_scheme_name(ws, hidx)
 
     as_of = extract_as_of_date(ws)
 
@@ -199,9 +228,16 @@ _STRIP = re.compile(
     re.I)
 
 
+# join words that AMCs write inconsistently: "&" (dropped as punctuation) vs the
+# word "and"; a stray "the". Removing these makes "Banking & Financial" and
+# "Banking And Financial" normalise identically.
+_NOISE_WORDS = {"and", "the"}
+
+
 def _norm(name: str) -> str:
     name = _STRIP.sub(" ", name or "")
-    return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+    s = re.sub(r"[^a-z0-9]+", " ", name.lower())
+    return " ".join(t for t in s.split() if t not in _NOISE_WORDS)
 
 
 def _resolve_codes(target: str, rows):
