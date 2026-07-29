@@ -56,6 +56,27 @@ def open_workbook(path):
         return openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True, read_only=True)
 
 
+def iter_workbooks(path):
+    """Yield (member_label, workbook) for a downloaded file.
+
+    Most AMCs publish a workbook directly; some (DSP, UTI) publish a .zip bundling
+    several workbooks. Handling both here keeps every per-AMC parser trivial.
+    Individual unreadable members are skipped rather than failing the archive."""
+    import zipfile
+    if zipfile.is_zipfile(path) and not path.lower().endswith((".xlsx", ".xls")):
+        with zipfile.ZipFile(path) as z:
+            for member in z.namelist():
+                if not member.lower().endswith((".xlsx", ".xls")) or "/." in member:
+                    continue
+                try:
+                    yield member, openpyxl.load_workbook(
+                        io.BytesIO(z.read(member)), data_only=True, read_only=True)
+                except Exception:
+                    continue
+    else:
+        yield os.path.basename(path), open_workbook(path)
+
+
 def cache_workbook(amc_slug: str, filename: str, url: str) -> str:
     """Download url once into data/holdings_raw/<amc>/<filename>; skip if present."""
     folder = os.path.join(DATA_ROOT, amc_slug)
@@ -227,10 +248,12 @@ def parse_standard_sheet(ws):
         raw.append((str(name).strip(), str(isin).strip(), industry, pct, mv))
 
     # AMCs differ: some store "% to NAV" as a fraction (0.0833), some as a percent
-    # (9.18). Detect from the total — a fund's weights sum to ~1 or ~100 — and scale
-    # everything to true percent uniformly.
-    pct_sum = sum(p for *_, p, _ in raw if p)
-    scale = 100.0 if 0 < pct_sum <= 3 else 1.0
+    # (9.18). Decide from the total, which for a fund is ~1 (fractions) or ~100
+    # (percents). Junk values in the weight column (e.g. DSP's written-off IL&FS
+    # side-pocket rows carry 372 there) are dropped BEFORE totalling — a single
+    # outlier must not flip the scale for the whole sheet.
+    weights = [p for *_, p, _ in raw if p and p <= 100]
+    scale = 100.0 if 0 < sum(weights) <= 3 else 1.0
 
     rows = [{
         "instrument_name": _clean_name(name),
@@ -239,20 +262,33 @@ def parse_standard_sheet(ws):
         "pct_of_aum": round(pct * scale, 4) if pct is not None else 0.0,
         "market_value_cr": round(mv / 100, 2) if mv is not None else None,
     } for name, isin, industry, pct, mv in raw]
+    # a single holding can't exceed 100% of the fund — such a row is junk in the
+    # weight column (defaulted/side-pocketed instruments), not a real position
+    rows = [r for r in rows if r["pct_of_aum"] <= 100.0]
     return scheme_name, as_of, rows
 
 
 # ---------------------------------------------------------------------------
 # scheme matching + DB writes
 # ---------------------------------------------------------------------------
+# Master (scheme_master) names carry plan/option suffixes that a monthly-portfolio
+# sheet never has — "…Fund - Direct Plan - Growth", "…- Regular - IDCW Monthly".
+# Stripping these collapses a fund's variants onto one key so holdings attach to all.
 _STRIP = re.compile(
-    r"\(.*?\)|-\s*(direct|regular)\s*plan|direct|regular|growth|idcw|dividend|"
-    r"payout|reinvestment|option|plan|fund|"
+    r"\(.*?\)|"
+    r"\b(direct|regular|dir|reg)\b|\bplan\b|"
+    r"\bgrowth\b|\bidcw\b|\bdividend\b|\bpayout\b|\breinvestment\b|\boption\b|\bfund\b|"
     # IDCW payout-frequency qualifiers: these distinguish *options* of one fund,
     # not different funds, so stripping them collapses e.g. "…Monthly IDCW" and
     # "…Quarterly IDCW" onto the same scheme the monthly portfolio sheet names.
     r"\b(daily|weekly|fortnightly|monthly|quarterly|half\s*yearly|yearly|annual|normal)\b",
     re.I)
+
+# A portfolio SHEET title is just the fund's name — it has no plan/option suffix.
+# So it gets only light cleaning. Stripping plan words from the sheet side too was a
+# real bug: "DSP Regular Savings Fund" lost its "Regular" and collided with the
+# different "DSP Savings Fund", merging two funds' portfolios (sums hit 164%).
+_STRIP_SHEET = re.compile(r"\(.*?\)|\bfund\b|\bscheme\b", re.I)
 
 
 # join words that AMCs write inconsistently: "&" (dropped as punctuation) vs the
@@ -261,10 +297,43 @@ _STRIP = re.compile(
 _NOISE_WORDS = {"and", "the"}
 
 
-def _norm(name: str) -> str:
-    name = _STRIP.sub(" ", name or "")
-    s = re.sub(r"[^a-z0-9]+", " ", name.lower())
+def _tokens(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", " ", (name or "").lower())
     return " ".join(t for t in s.split() if t not in _NOISE_WORDS)
+
+
+# words that only ever describe a plan/option, never a fund's identity
+_PLAN_NOISE = {
+    "direct", "regular", "dir", "reg", "plan", "growth", "idcw", "dividend",
+    "payout", "reinvestment", "option", "options", "bonus", "income",
+    "distribution", "cum", "capital", "withdrawal", "of", "daily", "weekly",
+    "fortnightly", "monthly", "quarterly", "half", "yearly", "annual", "normal",
+}
+
+
+def _norm(name: str) -> str:
+    """Normalise a scheme_master name to its fund identity.
+
+    Master names are "<fund name> Fund - <plan> - <option>". Splitting at the word
+    "Fund" keeps the identity intact — including words like the "Regular" in
+    "DSP Regular Savings Fund", which a blanket plan-word strip would wrongly
+    remove and merge into the different "DSP Savings Fund". Anything meaningful
+    after "Fund" (e.g. "- Equity Plan" of a retirement fund) is kept, since that
+    genuinely distinguishes schemes; pure plan/option words are dropped.
+    """
+    raw = re.sub(r"\(.*?\)", " ", name or "")
+    m = re.search(r"\bfunds?\b", raw, re.I)
+    if not m:
+        return _tokens(_STRIP.sub(" ", raw))       # no "Fund" word — fall back
+    head = _tokens(raw[:m.start()])
+    tail = [t for t in _tokens(raw[m.end():]).split() if t not in _PLAN_NOISE]
+    return " ".join([head] + tail).strip()
+
+
+def _norm_sheet(name: str) -> str:
+    """Normalise a portfolio-sheet title (keeps words that are part of the fund's
+    real name, e.g. the 'Regular' in 'DSP Regular Savings Fund')."""
+    return _tokens(_STRIP_SHEET.sub(" ", name or ""))
 
 
 def _resolve_codes(target: str, rows):
@@ -287,10 +356,21 @@ def _resolve_codes(target: str, rows):
     # 1) exact normalised-name match wins outright (the common case)
     if target in groups:
         return groups[target]
-    # 2) else a UNIQUE token-boundary prefix match — tolerates trailing descriptors
-    #    ("... Monthly Portfolio") on either side, but bails if >1 fund could match
-    cands = [n for n in groups
-             if target.startswith(n + " ") or n.startswith(target + " ")]
+    # 2) the sheet title carries trailing descriptors the master name lacks
+    #    ("SBI Retirement Benefit Fund - Aggressive Hybrid Plan"). Several master
+    #    names may prefix it ("…Aggressive", "…Aggressive Hybrid"); the LONGEST is
+    #    the most specific and is the right fund. A tie is genuinely ambiguous.
+    contained = [n for n in groups if target.startswith(n + " ")]
+    if contained:
+        longest = max(len(n) for n in contained)
+        best = [n for n in contained if len(n) == longest]
+        if len(best) == 1:
+            return groups[best[0]]
+        return []
+    # 3) the reverse — the target is SHORTER than the master name, i.e. too vague
+    #    ("HDFC Flexi" could be "HDFC Flexi Cap" or "HDFC Flexi Cap II"). Only a
+    #    single possible fund is safe; otherwise refuse rather than guess.
+    cands = [n for n in groups if n.startswith(target + " ")]
     return groups[cands[0]] if len(cands) == 1 else []
 
 
@@ -301,7 +381,7 @@ def match_scheme_codes(db, amc: str, sheet_scheme_name: str):
     rows = db.execute(text(
         "SELECT scheme_code, name FROM scheme_master WHERE amc = :amc"), {"amc": amc}
     ).all()
-    return _resolve_codes(_norm(sheet_scheme_name), [(c, n) for c, n in rows])
+    return _resolve_codes(_norm_sheet(sheet_scheme_name), [(c, n) for c, n in rows])
 
 
 def write_holdings(conn, scheme_code: str, as_of_date, rows):

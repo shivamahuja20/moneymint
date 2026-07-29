@@ -17,10 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from app.db import engine, SessionLocal
 from app.ingestion.holdings import base
-from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi, franklin, kotak
+from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi, franklin, kotak, dsp
 
 # registry — add a module here as each AMC parser is written
-PARSERS = [ppfas, hdfc, nippon, sbi, franklin, kotak]
+PARSERS = [ppfas, hdfc, nippon, sbi, franklin, kotak, dsp]
 
 MAX_PLAUSIBLE_PCT = 115.0   # holdings weights over this = bad source sheet, skip
 
@@ -39,32 +39,39 @@ def process_amc(mod) -> dict:
                 stats["skipped_files"] += 1
                 continue
             stats["files"] += 1
-            wb = base.open_workbook(path)
-            for ws in wb.worksheets:
-                scheme_name, as_of, rows = base.parse_standard_sheet(ws)
-                if not rows or not scheme_name:
-                    continue
-                # data-honesty guard: a fund can't be >100% invested. A holdings
-                # weight sum well over 100% means a bad source sheet (e.g. Franklin's
-                # liquid fund at ~130%) — skip it rather than store garbage. Low sums
-                # are fine (the rest is cash/TREPS without an ISIN).
-                if sum(r["pct_of_aum"] for r in rows) > MAX_PLAUSIBLE_PCT:
-                    stats.setdefault("suspect", []).append(scheme_name[:50])
-                    continue
-                as_of = as_of or datetime.date.today()
-                codes = base.match_scheme_codes(db, mod.AMC_NAME, scheme_name)
-                if not codes:
-                    stats["unmatched"].append(scheme_name[:50])
-                    continue
-                with engine.begin() as conn:
-                    for code in codes:
-                        base.write_holdings(conn, code, as_of, rows)
-                stats["schemes"] += 1
-                stats["rows"] += len(rows) * len(codes)
-            wb.close()
+            for _member, wb in base.iter_workbooks(path):
+                _process_workbook(wb, mod, db, stats)
     finally:
         db.close()
     return stats
+
+
+def _process_workbook(wb, mod, db, stats):
+    """Parse every sheet of one workbook and write matched schemes' holdings."""
+    try:
+        for ws in wb.worksheets:
+            scheme_name, as_of, rows = base.parse_standard_sheet(ws)
+            if not rows or not scheme_name:
+                continue
+            # data-honesty guard: a fund can't be >100% invested. A holdings weight
+            # sum well over 100% means a bad source sheet (e.g. Franklin's liquid
+            # fund at ~130%) — skip it rather than store garbage. Low sums are fine
+            # (the rest is cash/TREPS, which carries no ISIN).
+            if sum(r["pct_of_aum"] for r in rows) > MAX_PLAUSIBLE_PCT:
+                stats.setdefault("suspect", []).append(scheme_name[:50])
+                continue
+            as_of = as_of or datetime.date.today()
+            codes = base.match_scheme_codes(db, mod.AMC_NAME, scheme_name)
+            if not codes:
+                stats["unmatched"].append(scheme_name[:50])
+                continue
+            with engine.begin() as conn:
+                for code in codes:
+                    base.write_holdings(conn, code, as_of, rows)
+            stats["schemes"] += 1
+            stats["rows"] += len(rows) * len(codes)
+    finally:
+        wb.close()
 
 
 def run():

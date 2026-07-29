@@ -56,6 +56,31 @@ def test_unknown_fund_matches_nothing():
     assert _match("HDFC Balanced Advantage Fund") == set()
 
 
+def test_plan_word_in_fund_name_is_not_stripped():
+    """Regression: "DSP Regular Savings Fund" and "DSP Savings Fund" are DIFFERENT
+    funds. Stripping the plan word "Regular" from the fund's own name merged their
+    portfolios onto one scheme (weights summed to 164%)."""
+    from app.ingestion.holdings.base import _norm_sheet
+    rows = [("A", "DSP Savings Fund - Direct Plan - Growth"),
+            ("B", "DSP Savings Fund - Regular Plan - Growth"),
+            ("C", "DSP Regular Savings Fund - Direct Plan - Growth")]
+    assert set(_resolve_codes(_norm_sheet("DSP Savings Fund"), rows)) == {"A", "B"}
+    assert set(_resolve_codes(_norm_sheet("DSP Regular Savings Fund"), rows)) == {"C"}
+
+
+def test_sub_plan_funds_stay_distinct():
+    """A fund whose sub-plans are separate schemes (retirement funds) must not
+    collapse, and the most specific prefix wins over a shorter sibling."""
+    from app.ingestion.holdings.base import _norm_sheet
+    rows = [("A", "SBI Retirement Benefit Fund - Aggressive Plan - Direct Plan - Growth"),
+            ("B", "SBI Retirement Benefit Fund - Aggressive Hybrid Plan - Direct Plan - Growth"),
+            ("C", "SBI Retirement Benefit Fund - Conservative Plan - Direct Plan - Growth")]
+    assert set(_resolve_codes(
+        _norm_sheet("SBI RETIREMENT BENEFIT FUND - AGGRESSIVE HYBRID PLAN"), rows)) == {"B"}
+    assert set(_resolve_codes(
+        _norm_sheet("SBI RETIREMENT BENEFIT FUND - CONSERVATIVE PLAN"), rows)) == {"C"}
+
+
 def test_and_ampersand_equivalence():
     # AMCs write "&" and "And" interchangeably; both must resolve to the same fund
     rows = [("X", "SBI Banking & Financial Services Fund - Direct Plan - Growth"),
