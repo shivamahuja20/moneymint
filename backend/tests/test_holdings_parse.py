@@ -79,6 +79,14 @@ def test_parses_sbi_style_layout():
     assert rows[0]["instrument_name"] == "HDFC Bank Ltd." and rows[0]["pct_of_aum"] == 18.15
 
 
+def test_instrument_name_footnotes_stripped():
+    # Franklin appends markers like "$$ ~~" to names
+    from app.ingestion.holdings.base import _clean_name
+    assert _clean_name("HDFC Bank Ltd $$ ~~") == "HDFC Bank Ltd"
+    assert _clean_name("Infosys Ltd #") == "Infosys Ltd"
+    assert _clean_name("Reliance Industries Ltd") == "Reliance Industries Ltd"
+
+
 def test_date_wordings():
     from app.ingestion.holdings.base import DATE_RE
     from dateutil import parser as dp

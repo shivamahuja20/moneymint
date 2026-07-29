@@ -17,10 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from app.db import engine, SessionLocal
 from app.ingestion.holdings import base
-from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi
+from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi, franklin
 
 # registry — add a module here as each AMC parser is written
-PARSERS = [ppfas, hdfc, nippon, sbi]
+PARSERS = [ppfas, hdfc, nippon, sbi, franklin]
+
+MAX_PLAUSIBLE_PCT = 115.0   # holdings weights over this = bad source sheet, skip
 
 
 def process_amc(mod) -> dict:
@@ -41,6 +43,13 @@ def process_amc(mod) -> dict:
             for ws in wb.worksheets:
                 scheme_name, as_of, rows = base.parse_standard_sheet(ws)
                 if not rows or not scheme_name:
+                    continue
+                # data-honesty guard: a fund can't be >100% invested. A holdings
+                # weight sum well over 100% means a bad source sheet (e.g. Franklin's
+                # liquid fund at ~130%) — skip it rather than store garbage. Low sums
+                # are fine (the rest is cash/TREPS without an ISIN).
+                if sum(r["pct_of_aum"] for r in rows) > MAX_PLAUSIBLE_PCT:
+                    stats.setdefault("suspect", []).append(scheme_name[:50])
                     continue
                 as_of = as_of or datetime.date.today()
                 codes = base.match_scheme_codes(db, mod.AMC_NAME, scheme_name)
@@ -68,7 +77,8 @@ def run():
             ok += 1
             print(f"  ✓ {s['amc']}: {s['files']} file(s), {s['schemes']} scheme(s) matched, "
                   f"{s['rows']} holding rows"
-                  + (f", {len(s['unmatched'])} unmatched sheets" if s["unmatched"] else ""),
+                  + (f", {len(s['unmatched'])} unmatched sheets" if s["unmatched"] else "")
+                  + (f", {len(s['suspect'])} suspect (>100%) skipped" if s.get("suspect") else ""),
                   flush=True)
         except Exception as e:  # isolation: one AMC failing must not stop the rest
             failed += 1

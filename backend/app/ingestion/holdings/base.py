@@ -138,6 +138,12 @@ def _num(v):
         return None
 
 
+def _clean_name(name: str) -> str:
+    """Strip trailing footnote markers some AMCs append to instrument names,
+    e.g. Franklin's 'HDFC Bank Ltd $$ ~~' -> 'HDFC Bank Ltd'."""
+    return re.sub(r"[\s$~#*^@]+$", "", str(name).strip())
+
+
 # "<AMC> Mutual Fund" on its own is the house name, not a scheme — don't take it
 _AMC_LINE = re.compile(r"^[\w .&'-]{0,45}\bmutual fund$", re.I)
 
@@ -206,7 +212,7 @@ def parse_standard_sheet(ws):
     scale = 100.0 if 0 < pct_sum <= 3 else 1.0
 
     rows = [{
-        "instrument_name": name,
+        "instrument_name": _clean_name(name),
         "isin": isin,
         "sector": clean_sector(industry),
         "pct_of_aum": round(pct * scale, 4) if pct is not None else 0.0,
