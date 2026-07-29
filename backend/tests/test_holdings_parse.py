@@ -79,6 +79,34 @@ def test_parses_sbi_style_layout():
     assert rows[0]["instrument_name"] == "HDFC Bank Ltd." and rows[0]["pct_of_aum"] == 18.15
 
 
+def _kotak_style_sheet():
+    """Kotak shape: title 'Portfolio of <fund> as on <date>', header 'Name of
+    Instrument' (no 'the') in col A but names in col C beside the ISIN (merged-cell
+    offset)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([None, None, "Portfolio of Kotak Technology Fund as on 30-Jun-2026"])
+    ws.append(["Name of Instrument", None, None, "ISIN Code", "Industry",
+               "Yield", "Quantity", "Market Value (Rs.in Lacs)", "% to Net Assets"])
+    ws.append(["Equity & Equity related"])
+    ws.append([None, " ", "BHARTI AIRTEL LTD.", "INE397D01024", "Telecom - Services",
+               None, 1000, 1835.0, 18.35])
+    ws.append([None, " ", "Infosys Ltd.", "INE009A01021", "IT - Software",
+               None, 900, 1200.0, 12.00])
+    return ws
+
+
+def test_parses_kotak_style_layout():
+    name, as_of, rows = base.parse_standard_sheet(_kotak_style_sheet())
+    # 'Portfolio of' prefix and ' as on <date>' suffix stripped
+    assert name == "Kotak Technology Fund"
+    assert as_of == datetime.date(2026, 6, 30)
+    # names recovered from the column beside the ISIN despite the header offset
+    assert len(rows) == 2
+    assert rows[0]["instrument_name"] == "BHARTI AIRTEL LTD."
+    assert rows[0]["isin"] == "INE397D01024" and rows[0]["pct_of_aum"] == 18.35
+
+
 def test_instrument_name_footnotes_stripped():
     # Franklin appends markers like "$$ ~~" to names
     from app.ingestion.holdings.base import _clean_name

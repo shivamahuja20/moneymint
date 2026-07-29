@@ -75,7 +75,8 @@ def find_header_row(ws, scan=25):
     for i, row in enumerate(ws.iter_rows(min_row=1, max_row=scan, values_only=True), 1):
         vals = [str(c).lower() for c in row if c]
         joined = " ".join(vals)
-        if "name of the instrument" in joined and "isin" in joined:
+        has_name = "name of the instrument" in joined or "name of instrument" in joined
+        if has_name and "isin" in joined:
             return i
     return None
 
@@ -170,7 +171,22 @@ def _extract_scheme_name(ws, hidx):
         for s in cells:
             if len(s) > 5 and " " in s and re.search(r"[A-Za-z]{3}", s) \
                     and not _AMC_LINE.match(s):
-                return s
+                # some AMCs title the sheet "Portfolio of <fund> as on <date>" (Kotak)
+                s = re.sub(r"^portfolio\s+of\s+", "", s, flags=re.I)
+                s = re.sub(r"\s+as\s+(?:on|at|of)\b.*$", "", s, flags=re.I)
+                return s.strip()
+    return None
+
+
+def _name_beside_isin(row, cols):
+    """The instrument name from the cell adjacent to the ISIN (left then right),
+    skipping the industry column — for sheets whose Name header is column-shifted."""
+    ci = cols["isin"]
+    for cand in (ci - 1, ci + 1):
+        if 0 <= cand < len(row) and cand != cols.get("industry"):
+            v = row[cand]
+            if v and not is_isin(v) and re.search(r"[A-Za-z]{3}", str(v)):
+                return str(v).strip()
     return None
 
 
@@ -198,6 +214,11 @@ def parse_standard_sheet(ws):
         if not is_isin(isin):
             continue
         name = row[cols["name"]] if cols["name"] < len(row) else None
+        if not name or not str(name).strip():
+            # some AMCs merge cells so the "Name" header sits in a different column
+            # than the data (e.g. Kotak: header col A, names in col C). Fall back to
+            # the text cell next to the ISIN.
+            name = _name_beside_isin(row, cols)
         if not name:
             continue
         pct = _num(row[cols["pct"]]) if cols["pct"] < len(row) else None

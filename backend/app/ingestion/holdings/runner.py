@@ -17,10 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 from app.db import engine, SessionLocal
 from app.ingestion.holdings import base
-from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi, franklin
+from app.ingestion.holdings.parsers import ppfas, hdfc, nippon, sbi, franklin, kotak
 
 # registry — add a module here as each AMC parser is written
-PARSERS = [ppfas, hdfc, nippon, sbi, franklin]
+PARSERS = [ppfas, hdfc, nippon, sbi, franklin, kotak]
 
 MAX_PLAUSIBLE_PCT = 115.0   # holdings weights over this = bad source sheet, skip
 
