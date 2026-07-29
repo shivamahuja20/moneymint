@@ -86,6 +86,7 @@ class SchemeListItem(BaseModel):
     ret_5y: Optional[float] = None
     sharpe_3y: Optional[float] = None
     percentile_3y: Optional[float] = None   # category standing on 3Y return, 100 = best
+    aaum_cr: Optional[float] = None          # latest quarterly average AUM, INR crore
 
 
 class SchemeListResponse(BaseModel):
@@ -146,6 +147,10 @@ class SchemeDetail(BaseModel):
     nav: Optional[float] = None
     nav_date: Optional[date] = None
     data_quality: Optional[str] = None   # None=ok | 'stale' | 'discontinuity'
+    ter: Optional[float] = None           # latest real TER % from AMFI (null if unknown)
+    ter_as_of: Optional[date] = None
+    aaum_cr: Optional[float] = None        # latest quarterly average AUM, INR crore
+    aaum_as_of: Optional[date] = None
     benchmark: Optional[BenchmarkInfo] = None
     returns: list[SchemeReturnRow]
     risk: list[SchemeRiskRow]

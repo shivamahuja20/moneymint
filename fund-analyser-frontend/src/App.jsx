@@ -30,6 +30,18 @@ function fmtINR(v) {
   if (v == null) return "—";
   return "₹" + Math.round(v).toLocaleString("en-IN");
 }
+function fmtAUM(v) { return v == null ? "—" : fmtINR(v) + " Cr"; }
+
+// A small labelled stat (used for the real TER / AUM facts on the detail page).
+function Fact({ label, value, sub }) {
+  return (
+    <div style={{ minWidth: 130 }}>
+      <div className="mono" style={{ fontSize: 10, color: MUTE, letterSpacing: "0.08em", marginBottom: 4 }}>{label}</div>
+      <div className="mono" style={{ fontSize: 19, fontWeight: 600, color: INK }}>{value}</div>
+      {sub ? <div className="mono" style={{ fontSize: 10, color: MUTE, marginTop: 2 }}>{sub}</div> : null}
+    </div>
+  );
+}
 
 // Honest label for schemes the data-quality guard flagged. These are hidden from
 // the explorer but still reachable by direct link, so the detail page must say why.
@@ -177,6 +189,7 @@ function Explorer({ onSelectScheme, compareCodes, toggleCompare, onOpenCompare }
                     <Th col="3Y" label="3Y" />
                     <Th col="5Y" label="5Y" />
                     <Th col="sharpe" label="SHARPE 3Y" />
+                    <Th col="aum" label="AUM (Cr)" />
                   </tr>
                 </thead>
                 <tbody>
@@ -215,11 +228,14 @@ function Explorer({ onSelectScheme, compareCodes, toggleCompare, onOpenCompare }
                         </td>
                         <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, fontWeight: 600, color: retColor(s.ret_5y) }}>{fmtPct(s.ret_5y)}</td>
                         <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, color: INK }}>{fmtNum(s.sharpe_3y)}</td>
+                        <td className="mono" style={{ padding: "11px 12px", textAlign: "right", fontSize: 13, color: s.aaum_cr != null ? INK : MUTE }}>
+                          {s.aaum_cr != null ? Math.round(s.aaum_cr).toLocaleString("en-IN") : "—"}
+                        </td>
                       </tr>
                     );
                   })}
                   {data.schemes.length === 0 && (
-                    <tr><td colSpan={8} className="mono" style={{ padding: 30, textAlign: "center", color: MUTE }}>
+                    <tr><td colSpan={9} className="mono" style={{ padding: 30, textAlign: "center", color: MUTE }}>
                       No schemes match these filters.
                     </td></tr>
                   )}
@@ -345,6 +361,16 @@ function SchemeDetail({ code, onBack }) {
           </div>
         );
       })()}
+
+      {/* fund facts: real expense ratio + fund size from AMFI (null => "not disclosed") */}
+      <div style={{ display: "flex", gap: 44, flexWrap: "wrap", background: PANEL, border: BORDER, borderRadius: 8, padding: "16px 20px", marginBottom: 20 }}>
+        <Fact label="EXPENSE RATIO (TER)"
+          value={d.ter != null ? `${d.ter}%` : "—"}
+          sub={d.ter != null ? `AMFI · as of ${d.ter_as_of}` : "not disclosed"} />
+        <Fact label="FUND SIZE (AVG AUM)"
+          value={fmtAUM(d.aaum_cr)}
+          sub={d.aaum_cr != null ? `AMFI · as of ${d.aaum_as_of}` : "not disclosed"} />
+      </div>
 
       {/* NAV chart */}
       <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginBottom: 20 }}>

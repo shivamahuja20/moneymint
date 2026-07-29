@@ -168,6 +168,17 @@ class SchemeCost(Base):
     __table_args__ = (UniqueConstraint("scheme_code", "as_of_date", name="uq_scheme_costs_code_date"),)
 
 
+class SchemeAUM(Base):
+    __tablename__ = "scheme_aum"           # quarterly average AUM from AMFI (Phase 8)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scheme_code = Column(String, index=True, nullable=False)
+    as_of_date = Column(Date, nullable=False)     # quarter-end the AAUM is for
+    aaum_cr = Column(Float)                        # average AUM for the period, INR crore
+
+    __table_args__ = (UniqueConstraint("scheme_code", "as_of_date", name="uq_scheme_aum"),)
+
+
 class Holding(Base):
     __tablename__ = "holdings"             # Phase 8 fills
 

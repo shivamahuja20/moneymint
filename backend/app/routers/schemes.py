@@ -23,6 +23,7 @@ SORT_COLUMNS = {
     "3Y": "r3.ret",
     "5Y": "r5.ret",
     "sharpe": "rk.sharpe",
+    "aum": "aum.aaum_cr",
 }
 
 
@@ -124,12 +125,17 @@ def list_schemes(
         SELECT m.scheme_code, m.name, m.amc, m.category, m.plan_type, m.option_type,
                nav.nav, nav.date AS nav_date,
                r1.ret AS ret_1y, r3.ret AS ret_3y, r5.ret AS ret_5y,
-               rk.sharpe AS sharpe_3y, rnk.percentile AS percentile_3y
+               rk.sharpe AS sharpe_3y, rnk.percentile AS percentile_3y,
+               aum.aaum_cr
         FROM scheme_master m
         LEFT JOIN LATERAL (
             SELECT nav, date FROM nav_history h
             WHERE h.scheme_code = m.scheme_code ORDER BY date DESC LIMIT 1
         ) nav ON true
+        LEFT JOIN LATERAL (
+            SELECT aaum_cr FROM scheme_aum a
+            WHERE a.scheme_code = m.scheme_code ORDER BY as_of_date DESC LIMIT 1
+        ) aum ON true
         LEFT JOIN scheme_returns r1 ON r1.scheme_code = m.scheme_code AND r1.period = '1Y'
         LEFT JOIN scheme_returns r3 ON r3.scheme_code = m.scheme_code AND r3.period = '3Y'
         LEFT JOIN scheme_returns r5 ON r5.scheme_code = m.scheme_code AND r5.period = '5Y'
@@ -167,6 +173,16 @@ def scheme_detail(code: str, db: Session = Depends(get_db)):
         "SELECT proxy_scheme_code, proxy_name, note FROM benchmark_proxy WHERE category=:cat"
     ), {"cat": m["category"]}).mappings().first()
 
+    cost = db.execute(text(
+        "SELECT ter, as_of_date FROM scheme_costs WHERE scheme_code=:c "
+        "ORDER BY as_of_date DESC LIMIT 1"
+    ), {"c": code}).mappings().first()
+
+    aum = db.execute(text(
+        "SELECT aaum_cr, as_of_date FROM scheme_aum WHERE scheme_code=:c "
+        "ORDER BY as_of_date DESC LIMIT 1"
+    ), {"c": code}).mappings().first()
+
     return schemas.SchemeDetail(
         scheme_code=m["scheme_code"], name=m["name"], amc=m["amc"], category=m["category"],
         plan_type=m["plan_type"], option_type=m["option_type"], isin=m["isin"],
@@ -174,6 +190,10 @@ def scheme_detail(code: str, db: Session = Depends(get_db)):
         nav=nav["nav"] if nav else None,
         nav_date=nav["date"] if nav else None,
         data_quality=m["data_quality"],
+        ter=cost["ter"] if cost else None,
+        ter_as_of=cost["as_of_date"] if cost else None,
+        aaum_cr=aum["aaum_cr"] if aum else None,
+        aaum_as_of=aum["as_of_date"] if aum else None,
         benchmark=schemas.BenchmarkInfo(**bench) if bench else None,
         returns=_returns_for(db, code, m["category"]),
         risk=_risk_for(db, code),
