@@ -90,6 +90,48 @@ class SchemeDetail(BaseModel):
     rankings: list[RankingRow]
 
 
+class OverlapFund(BaseModel):
+    scheme_code: str
+    name: str
+    as_of_date: Optional[date] = None
+    holdings_count: int = 0
+    covered_pct: float = 0.0     # disclosed weight we can compare (never rescaled to 100)
+
+
+class CommonHolding(BaseModel):
+    isin: str
+    name: str
+    min_pct: float               # the duplicated part = min of the two weights
+    a_pct: float
+    b_pct: float
+
+
+class OverlapPair(BaseModel):
+    a: str
+    b: str
+    a_name: str
+    b_name: str
+    overlap_pct: Optional[float] = None   # null = at least one fund has no holdings
+    common_count: Optional[int] = None
+    top_common: list[CommonHolding] = []
+
+
+class CombinedHolding(BaseModel):
+    isin: str
+    name: str
+    pct: float                   # weight if money is split equally across the funds
+    held_by: int                 # how many of the selected funds hold it
+
+
+class OverlapResponse(BaseModel):
+    funds: list[OverlapFund]
+    as_of_mismatch: bool          # true when portfolios are from different months
+    pairs: list[OverlapPair]
+    combined: list[CombinedHolding] = []
+    concentration_top5: Optional[float] = None
+    concentration_top10: Optional[float] = None
+
+
 class RollingPoint(BaseModel):
     date: str          # window START date
     ret: float          # % (CAGR for windows >= 1Y, absolute below that)

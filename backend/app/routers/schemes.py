@@ -12,7 +12,7 @@ from sqlalchemy import text
 from typing import Optional
 
 from ..db import get_db
-from .. import schemas, rolling
+from .. import schemas, rolling, overlap
 
 router = APIRouter(prefix="/api/schemes", tags=["schemes"])
 
@@ -76,6 +76,74 @@ def compare(codes: str = Query(..., description="Comma-separated scheme codes, m
             risk=_risk_for(db, code),
         ))
     return schemas.CompareResponse(schemes=out)
+
+
+# ---------------------------------------------------------------------------
+# /overlap — how much of these funds is actually the same stocks
+#
+# Three "different" equity funds often hold one portfolio three times. Overlap is
+# the share of a rupee that is duplicated: sum of min(weight_a, weight_b) over
+# commonly-held ISINs. Matched on ISIN, never on name — AMCs write the same company
+# as "HDFC Bank Ltd.", "HDFC Bank Limited" etc., and name-matching would understate it.
+# Declared before /{code} so the path isn't swallowed by the detail route.
+# ---------------------------------------------------------------------------
+MAX_OVERLAP_FUNDS = 5
+
+
+@router.get("/overlap", response_model=schemas.OverlapResponse)
+def portfolio_overlap(
+    codes: str = Query(..., description=f"Comma-separated scheme codes, 2-{MAX_OVERLAP_FUNDS}"),
+    db: Session = Depends(get_db),
+):
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    if len(code_list) < 2:
+        raise HTTPException(400, "Overlap needs at least 2 schemes.")
+    if len(code_list) > MAX_OVERLAP_FUNDS:
+        raise HTTPException(400, f"At most {MAX_OVERLAP_FUNDS} schemes at a time.")
+
+    loaded = []
+    for code in code_list:
+        m = db.execute(text(
+            "SELECT scheme_code, name FROM scheme_master WHERE scheme_code=:c"), {"c": code}
+        ).mappings().first()
+        if not m:
+            raise HTTPException(404, f"Unknown scheme code '{code}'.")
+        as_of = db.execute(text(
+            "SELECT max(as_of_date) FROM holdings WHERE scheme_code=:c"), {"c": code}).scalar()
+        rows = db.execute(text(
+            "SELECT isin, pct_of_aum, instrument_name FROM holdings "
+            "WHERE scheme_code=:c AND as_of_date=:d"), {"c": code, "d": as_of}).all() if as_of else []
+        weights, names = overlap.to_weights([(r[0], r[1], r[2]) for r in rows])
+        loaded.append({"code": m["scheme_code"], "name": m["name"], "as_of": as_of,
+                       "weights": weights, "names": names})
+
+    dates = {f["as_of"] for f in loaded if f["as_of"]}
+    pairs = []
+    for i in range(len(loaded)):
+        for j in range(i + 1, len(loaded)):
+            a, b = loaded[i], loaded[j]
+            r = overlap.pairwise_overlap(a["weights"], b["weights"],
+                                         {**b["names"], **a["names"]})
+            pairs.append(schemas.OverlapPair(
+                a=a["code"], b=b["code"], a_name=a["name"], b_name=b["name"],
+                overlap_pct=r["overlap_pct"] if r else None,
+                common_count=r["common_count"] if r else None,
+                top_common=[schemas.CommonHolding(**c) for c in r["top_common"]] if r else [],
+            ))
+
+    sel = [(f["weights"], f["names"]) for f in loaded]
+    return schemas.OverlapResponse(
+        funds=[schemas.OverlapFund(
+            scheme_code=f["code"], name=f["name"], as_of_date=f["as_of"],
+            holdings_count=len(f["weights"]),
+            covered_pct=overlap.covered_weight(f["weights"]),
+        ) for f in loaded],
+        as_of_mismatch=len(dates) > 1,
+        pairs=pairs,
+        combined=[schemas.CombinedHolding(**c) for c in overlap.combined_exposure(sel, top=10)],
+        concentration_top5=overlap.concentration(sel, 5),
+        concentration_top10=overlap.concentration(sel, 10),
+    )
 
 
 # ---------------------------------------------------------------------------

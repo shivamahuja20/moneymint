@@ -974,6 +974,123 @@ function Compare({ codes, onBack }) {
       <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 12 }}>
         Highlighted = best in row (for drawdown, closest to zero). "—" where data is unavailable.
       </div>
+
+      <OverlapPanel codes={codes} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio overlap — how much of these funds is actually the same stocks.
+// ---------------------------------------------------------------------------
+function overlapColor(v) {
+  if (v == null) return MUTE;
+  return v >= 50 ? RED : v >= 30 ? GOLD : GREEN;
+}
+
+function OverlapPanel({ codes }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    if (!codes || codes.length < 2) return;
+    setD(null); setErr(null);
+    fetch(`${API_BASE}/api/schemes/overlap?codes=${codes.join(",")}`)
+      .then(r => { if (!r.ok) throw new Error(`API ${r.status}`); return r.json(); })
+      .then(setD).catch(e => setErr(e.message));
+  }, [codes]);
+
+  if (!codes || codes.length < 2) return null;
+
+  const pairs = d ? d.pairs.filter(p => p.overlap_pct != null) : [];
+  const missing = d ? d.funds.filter(f => f.holdings_count === 0) : [];
+
+  return (
+    <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginTop: 20 }}>
+      <span style={sectionLabel}>PORTFOLIO OVERLAP</span>
+      <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 4, maxWidth: 700, lineHeight: 1.5 }}>
+        How much of these funds is the same stocks. Overlap is the share of a rupee that's
+        duplicated — matched on ISIN, so different spellings of one company still count.
+      </div>
+
+      {err && <div className="mono" style={{ fontSize: 12, color: RED, marginTop: 12 }}>Couldn't load: {err}</div>}
+      {!d && !err && <div className="mono" style={{ fontSize: 12, color: MUTE, marginTop: 12 }}>Loading…</div>}
+
+      {d && (
+        <>
+          {d.as_of_mismatch && (
+            <div className="mono" style={{
+              fontSize: 11, color: GOLD, marginTop: 12, display: "flex", gap: 7, alignItems: "flex-start",
+            }}>
+              <AlertTriangle size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+              <span>
+                These portfolios are from different months
+                ({d.funds.filter(f => f.as_of_date).map(f => f.as_of_date).join(" vs ")}) —
+                AMCs disclose on their own schedule, so this is an approximate comparison.
+              </span>
+            </div>
+          )}
+
+          {missing.length > 0 && (
+            <div className="mono" style={{ fontSize: 11, color: MUTE, marginTop: 12 }}>
+              No disclosed holdings yet for {missing.map(f => f.name).join(", ")} — shown as "—"
+              rather than 0%.
+            </div>
+          )}
+
+          {pairs.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              {pairs.map((p, i) => (
+                <div key={i} className="ledger-line" style={{ padding: "10px 0" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "baseline" }}>
+                    <span className="mono" style={{ fontSize: 12, color: INK }}>
+                      {p.a_name} <span style={{ color: MUTE }}>vs</span> {p.b_name}
+                    </span>
+                    <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: overlapColor(p.overlap_pct) }}>
+                      {p.overlap_pct}%
+                    </span>
+                  </div>
+                  <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 3 }}>
+                    {p.common_count} common holdings
+                    {p.top_common.length > 0 && " · biggest: "}
+                    {p.top_common.slice(0, 3).map(t => `${t.name} ${t.min_pct}%`).join(", ")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {d.combined.length > 0 && (
+            <div style={{ marginTop: 22, borderTop: "1px solid rgba(237,234,226,0.08)", paddingTop: 16 }}>
+              <span style={sectionLabel}>WHAT YOU'D ACTUALLY OWN</span>
+              <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 4 }}>
+                Splitting your money equally across these {d.funds.length} funds.
+              </div>
+              <div style={{ display: "flex", gap: 34, flexWrap: "wrap", margin: "14px 0 6px" }}>
+                <Fact label="TOP 5 STOCKS" value={d.concentration_top5 != null ? `${d.concentration_top5}%` : "—"} sub="of your money" />
+                <Fact label="TOP 10 STOCKS" value={d.concentration_top10 != null ? `${d.concentration_top10}%` : "—"} sub="of your money" />
+              </div>
+              {d.combined.slice(0, 8).map((h, i) => (
+                <div key={i} className="ledger-line mono" style={{
+                  display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12,
+                  padding: "7px 0", fontSize: 12.5, alignItems: "center",
+                }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.name}</span>
+                  <span style={{ fontSize: 10, color: h.held_by === d.funds.length ? GOLD : MUTE }}>
+                    in {h.held_by}/{d.funds.length}
+                  </span>
+                  <span style={{ fontWeight: 600, color: INK, minWidth: 52, textAlign: "right" }}>{h.pct}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mono" style={{ fontSize: 10, color: MUTE, marginTop: 14, lineHeight: 1.5 }}>
+            Weights are as disclosed ({d.funds.filter(f => f.covered_pct > 0).map(f => `${f.covered_pct}%`).join(" / ")} of AUM
+            carries an ISIN — cash and derivatives are excluded, and we don't rescale to 100%).
+          </div>
+        </>
+      )}
     </div>
   );
 }
