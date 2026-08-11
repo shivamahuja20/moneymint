@@ -3,73 +3,6 @@ from datetime import date
 from typing import Optional
 
 
-class FundListItem(BaseModel):
-    id: str
-    name: str
-    amc: str
-    category: str
-    sector_focus: str
-    nav: float
-    return_1y: Optional[float] = None
-    benchmark_1y: Optional[float] = None
-    expense_ratio: Optional[float] = None
-
-    class Config:
-        from_attributes = True
-
-
-class FundListResponse(BaseModel):
-    sectors: list[str]
-    funds: list[FundListItem]
-    nav_as_of: Optional[date] = None
-
-
-class ReturnRow(BaseModel):
-    period: str
-    fund_return: float
-    benchmark_return: float
-    category_avg_return: float
-    as_of_date: date
-
-    class Config:
-        from_attributes = True
-
-
-class FundDetail(BaseModel):
-    id: str
-    name: str
-    amc: str
-    category: str
-    sector_focus: str
-    nav: float
-    expense_ratio: float
-    exit_load: str
-    aum_cr: float
-    returns: list[ReturnRow]
-
-    class Config:
-        from_attributes = True
-
-
-class SectorSummary(BaseModel):
-    sector: str
-    momentum_score: float
-    return_1m: float
-    date: date
-
-    class Config:
-        from_attributes = True
-
-
-class FlowPoint(BaseModel):
-    date: date
-    fii_cr: float
-    dii_cr: float
-
-    class Config:
-        from_attributes = True
-
-
 # ---------- Phase 5: all-schemes explorer ----------
 
 class SchemeListItem(BaseModel):
@@ -155,6 +88,39 @@ class SchemeDetail(BaseModel):
     returns: list[SchemeReturnRow]
     risk: list[SchemeRiskRow]
     rankings: list[RankingRow]
+
+
+class RollingPoint(BaseModel):
+    date: str          # window START date
+    ret: float          # % (CAGR for windows >= 1Y, absolute below that)
+
+
+class RollingStats(BaseModel):
+    windows: int
+    min: float
+    p25: float
+    median: float
+    avg: float
+    p75: float
+    max: float
+    pct_negative: float      # % of windows that lost money
+    pct_above_8: float
+    pct_above_12: float
+
+
+class RollingFund(BaseModel):
+    scheme_code: str
+    name: str
+    stats: Optional[RollingStats] = None   # null when history is too short
+    beat_benchmark_pct: Optional[float] = None
+    points: list[RollingPoint] = []
+
+
+class RollingResponse(BaseModel):
+    window: str
+    annualised: bool
+    benchmark: Optional[BenchmarkInfo] = None
+    funds: list[RollingFund]
 
 
 class NavPoint(BaseModel):

@@ -898,6 +898,47 @@ function viewFromUrl() {
   return code ? { page: "detail", code } : { page: "explorer" };
 }
 
+// ---------------------------------------------------------------------------
+// Stale-data banner
+//
+// The scheduled jobs fail SILENTLY — cron's errors go to a system mail file
+// nobody reads, and a job that never starts writes nothing to its own log. That
+// is exactly how a broken nightly sync went unnoticed for three weeks while the
+// app kept serving confidently-stale numbers. Surfacing freshness here, in the
+// one place the data actually gets looked at, is the failure's only reliable
+// tripwire.
+// ---------------------------------------------------------------------------
+const SOURCE_LABEL = { nav: "NAV prices", holdings: "portfolio holdings", costs: "fees & AUM" };
+
+function StaleDataBanner() {
+  const [health, setHealth] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/health/data`)
+      .then(r => r.json()).then(setHealth).catch(() => {});
+  }, []);
+
+  if (!health || !health.stale) return null;
+  const stale = Object.entries(health.sources).filter(([, v]) => v.stale);
+  if (!stale.length) return null;
+
+  return (
+    <div style={{
+      background: "rgba(198,82,75,0.12)", borderBottom: `1px solid ${RED}`,
+      padding: "10px 28px", display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap",
+    }}>
+      <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: RED }}>
+        DATA MAY BE OUT OF DATE
+      </span>
+      <span className="mono" style={{ fontSize: 11.5, color: MUTE }}>
+        {stale.map(([k, v]) => `${SOURCE_LABEL[k] || k} last updated ${v.latest || "never"}` +
+          (v.age_days != null ? ` (${v.age_days} days ago)` : "")).join(" · ")}
+        {" — the scheduled update may have failed."}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState(viewFromUrl);
   const [compareCodes, setCompareCodes] = useState([]);
@@ -939,6 +980,8 @@ export default function App() {
         </div>
         <div className="mono" style={{ fontSize: 12, color: MUTE }}>Personal MF Analytics</div>
       </div>
+
+      <StaleDataBanner />
 
       {view.page === "explorer" && (
         <Explorer

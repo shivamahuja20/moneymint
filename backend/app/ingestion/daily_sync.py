@@ -42,17 +42,6 @@ def upsert_navs(schemes) -> int:
     return len(rows)
 
 
-def refresh_legacy_funds(db, schemes_by_code) -> int:
-    updated = 0
-    for fund in db.query(models.Fund).filter(models.Fund.amfi_code.isnot(None)).all():
-        row = schemes_by_code.get(fund.amfi_code)
-        if row and row["nav"] is not None:
-            fund.nav = row["nav"]
-            updated += 1
-    db.commit()
-    return updated
-
-
 def run():
     print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] Daily sync starting.")
     navall = fetch_navall_text()
@@ -64,16 +53,8 @@ def run():
     n_nav = upsert_navs(schemes)
     print(f"nav_history: upserted {n_nav} NAV rows.")
 
-    db = SessionLocal()
-    try:
-        n_funds = refresh_legacy_funds(db, {s["scheme_code"]: s for s in schemes})
-    finally:
-        db.close()
-    print(f"legacy funds: {n_funds} NAVs refreshed.")
-
-    # Phase 4 analytics: rebuilds scheme_returns/scheme_risk/category_stats for all
-    # schemes and rewires the legacy fund_returns table with real benchmark/category
-    # numbers (supersedes the old per-fund recompute).
+    # Phase 4 analytics: rebuild scheme_returns / scheme_risk / category_stats /
+    # rankings for every scheme, and flag data-quality outliers.
     compute_metrics.run()
     print("Daily sync done.")
 

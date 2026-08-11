@@ -326,28 +326,6 @@ def flag_data_quality(conn) -> tuple[int, int]:
     return n_stale, n_disc
 
 
-def wire_legacy_fund_returns(conn) -> int:
-    """Rebuild fund_returns for the 10 frontend funds entirely from real data:
-    fund_return from scheme_returns, benchmark from the category proxy's
-    scheme_returns, category average from category_stats."""
-    conn.execute(text("DELETE FROM fund_returns"))
-    res = conn.execute(text("""
-        INSERT INTO fund_returns (fund_id, period, fund_return, benchmark_return, category_avg_return, as_of_date)
-        SELECT f.id, r.period, r.ret,
-               coalesce(pr.ret, 0.0),
-               coalesce(cs.avg_return, 0.0),
-               r.as_of_date
-        FROM funds f
-        JOIN scheme_master m  ON m.scheme_code = f.amfi_code
-        JOIN scheme_returns r ON r.scheme_code = f.amfi_code
-        LEFT JOIN benchmark_proxy bp ON bp.category = m.category
-        LEFT JOIN scheme_returns pr  ON pr.scheme_code = bp.proxy_scheme_code AND pr.period = r.period
-        LEFT JOIN category_stats cs  ON cs.category = m.category AND cs.period = r.period
-        WHERE r.period IN ('1M', '6M', '1Y', '3Y', '5Y')
-    """))
-    return res.rowcount
-
-
 def run():
     started = time.time()
     with engine.begin() as conn:
@@ -362,9 +340,7 @@ def run():
     with engine.begin() as conn:
         n_cat = compute_category_stats(conn)
         n_rank = compute_rankings(conn)
-        n_legacy = wire_legacy_fund_returns(conn)
-        print(f"category_stats: {n_cat:,} rows. rankings: {n_rank:,} rows. "
-              f"fund_returns rebuilt: {n_legacy} rows.")
+        print(f"category_stats: {n_cat:,} rows. rankings: {n_rank:,} rows.")
     print(f"Metrics engine done in {time.time() - started:.0f}s.")
 
 

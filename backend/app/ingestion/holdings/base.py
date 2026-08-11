@@ -117,17 +117,29 @@ def _column_map(header_row):
     return cols
 
 
-def extract_as_of_date(ws, scan=8):
+def extract_as_of_date(ws, scan=8, header_row=None):
+    """The statement date from the sheet's title area.
+
+    `header_row` bounds the scan to rows ABOVE the column headers. Without it the
+    scan ran into the data and picked up a holding's "Maturity Date" — DSP's
+    10Y G-Sec fund ended up stamped 2036, and one fund 2065.
+    """
     from dateutil import parser as dateparser
-    rows = list(ws.iter_rows(min_row=1, max_row=scan, values_only=True))
+    limit = min(scan, header_row - 1) if header_row and header_row > 1 else scan
+    if limit < 1:
+        return None
+    rows = list(ws.iter_rows(min_row=1, max_row=limit, values_only=True))
+    today = datetime.date.today()
     # (a) a real date/datetime cell in the header region — SBI puts the statement
     #     date as a date value beside a "PORTFOLIO STATEMENT AS ON" label.
     for row in rows:
         for c in row:
-            if isinstance(c, datetime.datetime):
-                return c.date()
-            if isinstance(c, datetime.date):
-                return c
+            d = c.date() if isinstance(c, datetime.datetime) else (
+                c if isinstance(c, datetime.date) else None)
+            # a portfolio is always as-of the past; a future date is a maturity
+            # or some other column bleeding in, never the statement date
+            if d and d <= today:
+                return d
     # (b) "as on <date>" written inside a text cell (PPFAS/HDFC/Nippon)
     for row in rows:
         for c in row:
@@ -227,7 +239,7 @@ def parse_standard_sheet(ws):
 
     scheme_name = _extract_scheme_name(ws, hidx)
 
-    as_of = extract_as_of_date(ws)
+    as_of = extract_as_of_date(ws, header_row=hidx)
 
     raw = []
     for row in ws.iter_rows(min_row=hidx + 1, values_only=True):
