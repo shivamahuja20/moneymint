@@ -12,7 +12,7 @@ from sqlalchemy import text
 from typing import Optional
 
 from ..db import get_db
-from .. import schemas
+from .. import schemas, rolling
 
 router = APIRouter(prefix="/api/schemes", tags=["schemes"])
 
@@ -76,6 +76,81 @@ def compare(codes: str = Query(..., description="Comma-separated scheme codes, m
             risk=_risk_for(db, code),
         ))
     return schemas.CompareResponse(schemes=out)
+
+
+# ---------------------------------------------------------------------------
+# /rolling — rolling returns for one or many schemes
+#
+# Point-to-point returns depend entirely on their two end dates. Rolling returns
+# compute the return from EVERY start date and show the distribution, which is the
+# honest read of past performance. Free tools that offer this cap it at 3-5 funds;
+# we hold every scheme's full daily history, so the cap here is only about latency.
+# Declared before /{code} so the path isn't swallowed by the detail route.
+# ---------------------------------------------------------------------------
+MAX_ROLLING_FUNDS = 12
+
+
+def _nav_rows(db, code):
+    return db.execute(text(
+        "SELECT date, nav FROM nav_history WHERE scheme_code=:c ORDER BY date"
+    ), {"c": code}).all()
+
+
+@router.get("/rolling", response_model=schemas.RollingResponse)
+def rolling_returns(
+    codes: str = Query(..., description=f"Comma-separated scheme codes, max {MAX_ROLLING_FUNDS}"),
+    window: str = Query("3Y", description="1M|3M|6M|1Y|2Y|3Y|5Y|7Y|10Y"),
+    points: bool = Query(True, description="Include the downsampled series for charting"),
+    db: Session = Depends(get_db),
+):
+    if window not in rolling.WINDOW_DAYS:
+        raise HTTPException(400, f"Invalid window '{window}'.")
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    if not code_list:
+        raise HTTPException(400, "No scheme codes provided.")
+    if len(code_list) > MAX_ROLLING_FUNDS:
+        raise HTTPException(400, f"At most {MAX_ROLLING_FUNDS} schemes at a time.")
+    window_days = rolling.WINDOW_DAYS[window]
+
+    # benchmark proxy of the FIRST scheme's category, used as the comparison line
+    first = db.execute(text(
+        "SELECT category FROM scheme_master WHERE scheme_code=:c"), {"c": code_list[0]}
+    ).mappings().first()
+    if not first:
+        raise HTTPException(404, f"Unknown scheme code '{code_list[0]}'.")
+    bench = db.execute(text(
+        "SELECT proxy_scheme_code, proxy_name, note FROM benchmark_proxy WHERE category=:cat"
+    ), {"cat": first["category"]}).mappings().first()
+
+    b_dates = b_rets = None
+    if bench:
+        b_dates, b_rets = rolling.rolling_series(
+            _nav_rows(db, bench["proxy_scheme_code"]), window_days)
+
+    out = []
+    for code in code_list:
+        m = db.execute(text(
+            "SELECT scheme_code, name FROM scheme_master WHERE scheme_code=:c"), {"c": code}
+        ).mappings().first()
+        if not m:
+            raise HTTPException(404, f"Unknown scheme code '{code}'.")
+        d, r = rolling.rolling_series(_nav_rows(db, code), window_days)
+        stats = rolling.distribution(r)
+        beat = None
+        if stats and b_dates is not None and code != (bench or {}).get("proxy_scheme_code"):
+            beat = rolling.beat_rate(d, r, b_dates, b_rets)
+        out.append(schemas.RollingFund(
+            scheme_code=m["scheme_code"], name=m["name"],
+            stats=schemas.RollingStats(**stats) if stats else None,
+            beat_benchmark_pct=beat,
+            points=[schemas.RollingPoint(**p) for p in rolling.downsample(d, r)] if points else [],
+        ))
+
+    return schemas.RollingResponse(
+        window=window, annualised=window_days >= 365,
+        benchmark=schemas.BenchmarkInfo(**bench) if bench else None,
+        funds=out,
+    )
 
 
 # ---------------------------------------------------------------------------

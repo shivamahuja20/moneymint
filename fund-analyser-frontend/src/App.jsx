@@ -483,9 +483,107 @@ function SchemeDetail({ code, onBack }) {
         </div>
       </div>
 
+      <RollingReturns code={code} />
+
       <HoldingsPanels holdings={holdings} />
 
       <Calculators code={code} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rolling returns — the return from EVERY start date, not just two dates.
+// ---------------------------------------------------------------------------
+const ROLLING_WINDOWS = ["1Y", "3Y", "5Y", "7Y"];
+
+function RollingReturns({ code }) {
+  const [window_, setWindow] = useState("3Y");
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    setD(null); setErr(null);
+    fetch(`${API_BASE}/api/schemes/rolling?codes=${code}&window=${window_}`)
+      .then(r => { if (!r.ok) throw new Error(`API ${r.status}`); return r.json(); })
+      .then(setD).catch(e => setErr(e.message));
+  }, [code, window_]);
+
+  const fund = d && d.funds && d.funds[0];
+  const s = fund && fund.stats;
+
+  return (
+    <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <span style={sectionLabel}>ROLLING RETURNS</span>
+          <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 4, maxWidth: 620, lineHeight: 1.5 }}>
+            The {window_} return starting from <em>every</em> day in this fund's history — not just
+            the one window ending today. Shows the range of outcomes a real investor could have had.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {ROLLING_WINDOWS.map(w => (
+            <button key={w} onClick={() => setWindow(w)} style={{
+              background: window_ === w ? GOLD : "transparent", color: window_ === w ? BG : MUTE,
+              border: BORDER, borderRadius: 6, padding: "4px 10px", fontSize: 11.5, fontWeight: 600,
+              cursor: "pointer", fontFamily: "'Inter',sans-serif",
+            }}>{w}</button>
+          ))}
+        </div>
+      </div>
+
+      {err && <div className="mono" style={{ fontSize: 12, color: RED, marginTop: 12 }}>Couldn't load: {err}</div>}
+      {!d && !err && <div className="mono" style={{ fontSize: 12, color: MUTE, marginTop: 12 }}>Loading…</div>}
+
+      {d && !s && (
+        <div className="mono" style={{ fontSize: 12.5, color: MUTE, marginTop: 12 }}>
+          Not enough history for a {window_} rolling analysis of this fund.
+        </div>
+      )}
+
+      {s && (
+        <>
+          <div style={{ display: "flex", gap: 34, flexWrap: "wrap", marginTop: 16, marginBottom: 4 }}>
+            <Fact label="WORST" value={fmtPct(s.min)} sub={`of ${s.windows.toLocaleString()} windows`} />
+            <Fact label="MEDIAN" value={fmtPct(s.median)} sub="typical outcome" />
+            <Fact label="BEST" value={fmtPct(s.max)} />
+            <Fact label="LOST MONEY" value={`${s.pct_negative}%`} sub="of windows" />
+            <Fact label="ABOVE 12%" value={`${s.pct_above_12}%`} sub="of windows" />
+            {fund.beat_benchmark_pct != null && (
+              <Fact label="BEAT BENCHMARK" value={`${fund.beat_benchmark_pct}%`}
+                sub={d.benchmark ? "of overlapping windows" : null} />
+            )}
+          </div>
+
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={fund.points}>
+              <defs>
+                <linearGradient id="rollFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={GOLD} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={GOLD} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="rgba(237,234,226,0.06)" vertical={false} />
+              <XAxis dataKey="date" stroke={MUTE} fontSize={10} tickLine={false} axisLine={false}
+                minTickGap={60} tickFormatter={v => v.slice(0, 7)} />
+              <YAxis stroke={MUTE} fontSize={10} tickLine={false} axisLine={false} width={44}
+                tickFormatter={v => `${v}%`} />
+              <Tooltip contentStyle={{ background: BG, border: "1px solid rgba(237,234,226,0.15)", borderRadius: 6, fontSize: 11 }}
+                labelStyle={{ color: MUTE }}
+                labelFormatter={v => `${window_} starting ${v}`}
+                formatter={v => [`${v}%`, d.annualised ? "annualised" : "absolute"]} />
+              <Area type="monotone" dataKey="ret" stroke={GOLD} strokeWidth={1.4} fill="url(#rollFill)" />
+            </AreaChart>
+          </ResponsiveContainer>
+
+          <div className="mono" style={{ fontSize: 10, color: MUTE, marginTop: 8, lineHeight: 1.5 }}>
+            {d.annualised ? "Annualised (CAGR) per window." : "Absolute return per window."}
+            {d.benchmark ? ` Benchmark: ${d.benchmark.proxy_name}.` : " No benchmark proxy for this category."}
+            {" "}Windows spanning a NAV discontinuity are excluded.
+          </div>
+        </>
+      )}
     </div>
   );
 }
