@@ -132,6 +132,29 @@ class OverlapResponse(BaseModel):
     concentration_top10: Optional[float] = None
 
 
+class PlanSide(BaseModel):
+    scheme_code: str
+    name: str
+    ter: Optional[float] = None
+    cagr: Optional[float] = None
+    value: Optional[float] = None
+
+
+class CostLeakResponse(BaseModel):
+    comparable: bool                  # false => this fund has no Direct/Regular pair we can compare
+    reason: Optional[str] = None      # why not, when comparable is false
+    amount: Optional[float] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    years: Optional[float] = None
+    direct: Optional[PlanSide] = None
+    regular: Optional[PlanSide] = None
+    ter_gap: Optional[float] = None            # Regular TER - Direct TER, percentage points
+    leak_rupees: Optional[float] = None         # what the commission cost over the window
+    leak_pct_of_investment: Optional[float] = None
+    drag_pct_per_year: Optional[float] = None
+
+
 class RollingPoint(BaseModel):
     date: str          # window START date
     ret: float          # % (CAGR for windows >= 1Y, absolute below that)

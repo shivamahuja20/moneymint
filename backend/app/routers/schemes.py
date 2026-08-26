@@ -12,7 +12,7 @@ from sqlalchemy import text
 from typing import Optional
 
 from ..db import get_db
-from .. import schemas, rolling, overlap
+from .. import schemas, rolling, overlap, costleak
 
 router = APIRouter(prefix="/api/schemes", tags=["schemes"])
 
@@ -383,6 +383,78 @@ def scheme_nav(code: str, range: str = Query("3Y"), db: Session = Depends(get_db
     return schemas.NavSeriesResponse(
         scheme_code=code, range=range,
         points=[schemas.NavPoint(date=r["date"], nav=r["nav"]) for r in rows],
+    )
+
+
+# ---------------------------------------------------------------------------
+# /{code}/cost-leak — what the Regular plan's commission actually costs
+#
+# A Regular plan is the same portfolio and manager as its Direct twin; the only
+# difference is the distributor commission buried in the expense ratio. Rather than
+# modelling that from the TER gap, we measure it: both plans have real NAV history,
+# so we invest the same amount on the same day in each and compare ending values.
+# ---------------------------------------------------------------------------
+@router.get("/{code}/cost-leak", response_model=schemas.CostLeakResponse)
+def cost_leak(code: str,
+              amount: float = Query(500000, gt=0, description="Amount invested (INR)"),
+              years: Optional[float] = Query(None, gt=0, le=30,
+                                             description="Limit to the most recent N years"),
+              db: Session = Depends(get_db)):
+    me = db.execute(text(
+        "SELECT scheme_code, fund_group_id FROM scheme_master WHERE scheme_code=:c"
+    ), {"c": code}).mappings().first()
+    if not me:
+        raise HTTPException(404, f"Unknown scheme code '{code}'.")
+    if not me["fund_group_id"]:
+        return schemas.CostLeakResponse(
+            comparable=False, reason="This scheme isn't linked to a Direct/Regular fund group.")
+
+    # the fund's Direct and Regular twins, matched on plan + option so we never
+    # compare a Growth plan against an IDCW one (their NAVs aren't comparable)
+    sibs = db.execute(text("""
+        SELECT scheme_code, name, plan_type, option_type
+        FROM scheme_master
+        WHERE fund_group_id = :g AND plan_type IN ('Direct','Regular')
+    """), {"g": me["fund_group_id"]}).mappings().all()
+
+    my_option = db.execute(text(
+        "SELECT option_type FROM scheme_master WHERE scheme_code=:c"), {"c": code}).scalar()
+    target_option = my_option or "Growth"
+    pick = lambda plan: next(
+        (r for r in sibs if r["plan_type"] == plan and r["option_type"] == target_option), None)
+    d, r = pick("Direct"), pick("Regular")
+    if not d or not r:
+        return schemas.CostLeakResponse(
+            comparable=False,
+            reason=f"No matching Direct and Regular {target_option} pair for this fund.")
+
+    rows = {x["scheme_code"]: _nav_rows(db, x["scheme_code"]) for x in (d, r)}
+    out = costleak.cost_leak(
+        [(a, float(b)) for a, b in rows[d["scheme_code"]]],
+        [(a, float(b)) for a, b in rows[r["scheme_code"]]],
+        amount=amount, years=years)
+    if not out:
+        return schemas.CostLeakResponse(
+            comparable=False,
+            reason="Not enough overlapping NAV history for both plans to compare.")
+
+    ter = {x[0]: x[1] for x in db.execute(text(
+        "SELECT DISTINCT ON (scheme_code) scheme_code, ter FROM scheme_costs "
+        "WHERE scheme_code = ANY(:c) ORDER BY scheme_code, as_of_date DESC"),
+        {"c": [d["scheme_code"], r["scheme_code"]]}).all()}
+    d_ter, r_ter = ter.get(d["scheme_code"]), ter.get(r["scheme_code"])
+
+    return schemas.CostLeakResponse(
+        comparable=True, amount=out["amount"], start=out["start"], end=out["end"],
+        years=out["years"],
+        direct=schemas.PlanSide(scheme_code=d["scheme_code"], name=d["name"],
+                                ter=d_ter, cagr=out["direct_cagr"], value=out["direct_value"]),
+        regular=schemas.PlanSide(scheme_code=r["scheme_code"], name=r["name"],
+                                 ter=r_ter, cagr=out["regular_cagr"], value=out["regular_value"]),
+        ter_gap=round(r_ter - d_ter, 2) if (d_ter is not None and r_ter is not None) else None,
+        leak_rupees=out["leak_rupees"],
+        leak_pct_of_investment=out["leak_pct_of_investment"],
+        drag_pct_per_year=out["drag_pct_per_year"],
     )
 
 

@@ -483,11 +483,98 @@ function SchemeDetail({ code, onBack }) {
         </div>
       </div>
 
+      <CostLeak code={code} />
+
       <RollingReturns code={code} />
 
       <HoldingsPanels holdings={holdings} />
 
       <Calculators code={code} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Direct vs Regular — what the distributor commission actually costs, in rupees.
+// ---------------------------------------------------------------------------
+const LEAK_AMOUNTS = [100000, 500000, 1000000];
+
+function CostLeak({ code }) {
+  const [amount, setAmount] = useState(500000);
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    setD(null); setErr(null);
+    fetch(`${API_BASE}/api/schemes/${code}/cost-leak?amount=${amount}`)
+      .then(r => { if (!r.ok) throw new Error(`API ${r.status}`); return r.json(); })
+      .then(setD).catch(e => setErr(e.message));
+  }, [code, amount]);
+
+  if (err) return null;
+  if (d && !d.comparable) return null;   // no Direct/Regular twin — say nothing rather than guess
+
+  return (
+    <div style={{ background: PANEL, border: BORDER, borderRadius: 8, padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <span style={sectionLabel}>DIRECT vs REGULAR — COST OF COMMISSION</span>
+          <div className="mono" style={{ fontSize: 10.5, color: MUTE, marginTop: 4, maxWidth: 640, lineHeight: 1.5 }}>
+            Same portfolio, same manager — the Regular plan just carries the distributor's
+            commission inside its expense ratio. Measured from both plans' real NAVs, not estimated.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {LEAK_AMOUNTS.map(a => (
+            <button key={a} onClick={() => setAmount(a)} style={{
+              background: amount === a ? GOLD : "transparent", color: amount === a ? BG : MUTE,
+              border: BORDER, borderRadius: 6, padding: "4px 10px", fontSize: 11.5, fontWeight: 600,
+              cursor: "pointer", fontFamily: "'Inter',sans-serif",
+            }}>{a >= 1000000 ? `${a / 100000}L` : `${a / 100000}L`}</button>
+          ))}
+        </div>
+      </div>
+
+      {!d && <div className="mono" style={{ fontSize: 12, color: MUTE, marginTop: 12 }}>Loading…</div>}
+
+      {d && d.comparable && (
+        <>
+          <div style={{
+            marginTop: 16, marginBottom: 14, padding: "14px 16px", borderRadius: 8,
+            background: "rgba(198,82,75,0.08)", border: "1px solid rgba(198,82,75,0.35)",
+          }}>
+            <div className="mono" style={{ fontSize: 11, color: MUTE, letterSpacing: "0.06em" }}>
+              HOLDING THE REGULAR PLAN WOULD HAVE COST YOU
+            </div>
+            <div className="mono" style={{ fontSize: 30, fontWeight: 700, color: RED, marginTop: 4 }}>
+              {fmtINR(d.leak_rupees)}
+            </div>
+            <div className="mono" style={{ fontSize: 11, color: INK, marginTop: 3 }}>
+              on {fmtINR(d.amount)} invested {d.start} → {d.end} ({d.years} years) —
+              that's {d.leak_pct_of_investment}% of what you put in, a {d.drag_pct_per_year}%/yr drag.
+            </div>
+          </div>
+
+          <div className="mono" style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", fontSize: 10.5, color: MUTE, paddingBottom: 6 }}>
+            <span></span><span style={{ textAlign: "right" }}>DIRECT</span><span style={{ textAlign: "right" }}>REGULAR</span>
+          </div>
+          {[
+            ["Expense ratio", d.direct.ter != null ? `${d.direct.ter}%` : "—", d.regular.ter != null ? `${d.regular.ter}%` : "—"],
+            ["Return (CAGR)", `${d.direct.cagr}%`, `${d.regular.cagr}%`],
+            ["Value today", fmtINR(d.direct.value), fmtINR(d.regular.value)],
+          ].map(([label, a, b], i) => (
+            <div key={i} className="ledger-line mono" style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", padding: "9px 0", fontSize: 13 }}>
+              <span style={{ color: MUTE }}>{label}</span>
+              <span style={{ textAlign: "right", fontWeight: 600, color: GREEN }}>{a}</span>
+              <span style={{ textAlign: "right", color: INK }}>{b}</span>
+            </div>
+          ))}
+          <div className="mono" style={{ fontSize: 10, color: MUTE, marginTop: 12, lineHeight: 1.5 }}>
+            Both plans valued over the identical window (Direct plans only exist from 2013).
+            {d.ter_gap != null ? ` Current TER gap: ${d.ter_gap} percentage points.` : ""}
+          </div>
+        </>
+      )}
     </div>
   );
 }
