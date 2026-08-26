@@ -19,9 +19,16 @@ import datetime
 import openpyxl
 import httpx
 
-DATA_ROOT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
-    "data", "holdings_raw",
+# Where downloaded AMC workbooks are cached.
+#
+# NOT inside the project: on macOS the project lives under ~/Desktop, which is a
+# TCC-protected folder. A *scheduled* job (launchd/cron) may read the project but
+# is refused permission to WRITE there ("Operation not permitted"), so caching
+# workbooks into backend/data/ made this ETL impossible to automate. Application
+# Support is writable from any context. Override with MONEYMINT_HOLDINGS_DIR.
+DATA_ROOT = os.environ.get(
+    "MONEYMINT_HOLDINGS_DIR",
+    os.path.expanduser("~/Library/Application Support/MoneyMint/holdings_raw"),
 )
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " \
      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -78,7 +85,7 @@ def iter_workbooks(path):
 
 
 def cache_workbook(amc_slug: str, filename: str, url: str) -> str:
-    """Download url once into data/holdings_raw/<amc>/<filename>; skip if present."""
+    """Download url once into DATA_ROOT/<amc>/<filename>; skip if present."""
     folder = os.path.join(DATA_ROOT, amc_slug)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, filename)
