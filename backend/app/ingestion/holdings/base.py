@@ -185,8 +185,12 @@ def _clean_name(name: str) -> str:
     return re.sub(r"[\s$~#*^@]+$", "", str(name).strip())
 
 
-# "<AMC> Mutual Fund" on its own is the house name, not a scheme — don't take it
-_AMC_LINE = re.compile(r"^[\w .&'-]{0,45}\bmutual fund$", re.I)
+# The house name is not a scheme. It appears bare ("Bank of India Mutual Fund")
+# or behind a label ("Name of Mutual Fund : Bank of India Mutual Fund" — BOI),
+# so allow an optional label prefix and punctuation before it.
+_AMC_LINE = re.compile(
+    r"^(?:name\s+of\s+(?:the\s+)?(?:mutual\s+fund|amc)\s*[:\-]\s*)?"
+    r"[\w .&',\-]{0,45}\bmutual fund\.?$", re.I)
 
 
 def _extract_scheme_name(ws, hidx):
