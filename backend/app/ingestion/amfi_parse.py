@@ -12,6 +12,7 @@ parse_navall() yields one dict per scheme row, carrying the section context.
 """
 import hashlib
 import re
+import time
 
 import httpx
 from dateutil import parser as dateparser
@@ -29,10 +30,32 @@ _PLAN_OPTION_TOKENS = re.compile(
 )
 
 
-def fetch_navall_text() -> str:
-    resp = httpx.get(AMFI_URL, timeout=60.0, follow_redirects=True)
-    resp.raise_for_status()
-    return resp.text
+def fetch_navall_text(attempts: int = 5) -> str:
+    """Download AMFI's daily NAV file, retrying transient network failures.
+
+    The nightly job runs at 23:30, when the Mac may still be waking or the
+    network not yet up: a single DNS blip ("nodename nor servname provided")
+    used to abort the whole sync and cost that day's data — 3 of 14 runs died
+    that way, leaving NAV 8 days stale. Retrying with backoff turns a blip into
+    a delay instead of a missed day.
+    """
+    delay = 20.0
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = httpx.get(AMFI_URL, timeout=60.0, follow_redirects=True)
+            resp.raise_for_status()
+            return resp.text
+        except (httpx.HTTPError, OSError) as e:
+            last = e
+            if attempt == attempts:
+                break
+            print(f"  AMFI fetch failed ({type(e).__name__}), retry "
+                  f"{attempt}/{attempts - 1} in {delay:.0f}s", flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, 300)
+    raise RuntimeError(
+        f"AMFI fetch failed after {attempts} attempts: {type(last).__name__}: {last}")
 
 
 def derive_plan_type(name: str):
@@ -44,7 +67,7 @@ def derive_plan_type(name: str):
 
 
 def derive_option_type(name: str):
-    has_idcw = re.search(r"\bidcw\b|\bdividend\b|income distribution", name, re.I)
+    has_idcw = re.search(r"\bidcw\b|\bdcw\b|\bdividend\b|income distribution", name, re.I)
     has_growth = re.search(r"\bgrowth\b", name, re.I)
     if has_idcw:
         return "IDCW"
@@ -83,12 +106,23 @@ def parse_navall(text: str):
         if not code.isdigit():
             continue  # column header row
         name = parts[3].strip()
+        # AMFI changed NAVAll.txt's layout in Aug 2026: it grew from 6 columns to 8,
+        # adding explicit "Plan" and "Option" columns and dropping the plan/option
+        # suffix from the Scheme Name. Reading NAV from a fixed index silently
+        # produced zero usable rows (NAV column became the literal "Direct Plan"),
+        # so the layout is detected per row and both are supported.
+        if len(parts) >= 8:
+            plan_src, option_src = parts[4].strip(), parts[5].strip()
+            nav_raw, date_raw = parts[6], parts[7]
+        else:
+            plan_src = option_src = name        # legacy: it was all in the name
+            nav_raw, date_raw = parts[4], parts[5]
         try:
-            nav = float(parts[4])
+            nav = float(nav_raw)
         except ValueError:
             nav = None  # "N.A."
         try:
-            nav_date = dateparser.parse(parts[5].strip(), dayfirst=True).date()
+            nav_date = dateparser.parse(date_raw.strip(), dayfirst=True).date()
         except (ValueError, OverflowError):
             nav_date = None
         isin = parts[1].strip()
@@ -106,7 +140,7 @@ def parse_navall(text: str):
             "category": category,
             "sub_category": sub_category,
             "amc": amc,
-            "plan_type": derive_plan_type(name),
-            "option_type": derive_option_type(name),
+            "plan_type": derive_plan_type(plan_src),
+            "option_type": derive_option_type(option_src),
             "fund_group_id": fund_group_id(amc, name),
         }
