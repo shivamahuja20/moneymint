@@ -21,3 +21,7 @@ backend/untitled folder/
 
 # Downloaded raw portfolio disclosures (external data, personal-use, not redistributed)
 backend/data/
+
+# Personal working notes / local machine config (kept locally, not published)
+backend/MONEYMINT_BRIEF.md
+.claude/settings.local.json
